@@ -11,7 +11,10 @@
   let gChainId=null, gProvider=null, gSafe=null, gOwners=[], gThreshold=0, gNonce=0;
   let gDomain=null, gTypes=null, gMessage=null, gHash=null, gSigs=[];
   let gGasChoice=null;
+
+  // tx_human.json（pretty 与 compact）
   let gSubmitJSONText="";
+  let gSubmitJSONCompact="";
 
   async function rpc(url, method, params=[]){
     const body = JSON.stringify({ jsonrpc:"2.0", id:Date.now(), method, params });
@@ -386,69 +389,71 @@ nonce=${gNonce}`;
     };
   }
 
-  // 从 tx_human.json 生成 SAFEQR（循环）
-  $("btn_make_submit").onclick=async ()=>{
+  // ===== ① 从 calldata 生成 tx_human.json =====
+  function buildTxHumanJsonFromCalldata(){
+    const calldata = ($("calldata").value || "").trim();
+    if(!calldata) throw new Error("请先生成并填写 calldata（上方“聚合并编码”）");
+    const gasFields = gGasChoice
+      ? { maxFeePerGas_gwei:Number(gGasChoice.maxFee_gwei?.toFixed?.(2)??gGasChoice.maxFee_gwei),
+          maxPriorityFeePerGas_gwei:Number(gGasChoice.priority_gwei?.toFixed?.(2)??gGasChoice.priority_gwei) }
+      : { maxFeePerGas_gwei:"根据网络估算", maxPriorityFeePerGas_gwei:"根据网络估算" };
+
+    const h={
+      kind:"ETH",
+      from:"提交者 EOA（由离线端推导）",
+      to:gSafe?.target || "0xSafeAddress",
+      value_wei:0,
+      amount_eth:"0",
+      data_hex:calldata,
+      chainId:gChainId,
+      nonce:"提交者EOA当前nonce（下方工具可查）",
+      gas:"建议估算填写",
+      ...gasFields
+    };
+    const compact = JSON.stringify(h);
+    const pretty  = JSON.stringify(h, null, 2);
+    return {compact, pretty};
+  }
+
+  $("btn_build_json").onclick = ()=>{
     try{
-      if(!$("calldata").value) throw new Error("请先聚合并编码 calldata");
-      const gasFields = gGasChoice
-        ? { maxFeePerGas_gwei:Number(gGasChoice.maxFee_gwei?.toFixed?.(2)??gGasChoice.maxFee_gwei),
-            maxPriorityFeePerGas_gwei:Number(gGasChoice.priority_gwei?.toFixed?.(2)??gGasChoice.priority_gwei) }
-        : { maxFeePerGas_gwei:"根据网络估算", maxPriorityFeePerGas_gwei:"根据网络估算" };
-
-      const h={
-        kind:"ETH",
-        from:"提交者 EOA（由离线端推导）",
-        to:gSafe?.target || "0xSafeAddress",
-        value_wei:0,
-        amount_eth:"0",
-        data_hex:$("calldata").value,
-        chainId:gChainId,
-        nonce:"提交者EOA当前nonce（下方工具可查）",
-        gas:"建议估算填写",
-        ...gasFields
-      };
-
-      const compact = JSON.stringify(h);     // 用紧凑串参与哈希与分片
-      gSubmitJSONText = JSON.stringify(h, null, 2);
-
-      const {chunk, gap} = getQRSettings();
-      const built = await buildSafeQRFramesFromText(compact, chunk);
-
-      QR_FRAMES = built.frames;
-      QR_IDX = 0;
-      renderQRFrame();
-      startQRLoop(gap);
-
-      $("submit_status").textContent = `已生成 ${QR_FRAMES.length} 帧 SAFEQR（循环播放中），id=${built.id}`;
-    }catch(e){ $("submit_status").textContent="错误："+e.message; }
+      const {compact, pretty} = buildTxHumanJsonFromCalldata();
+      gSubmitJSONCompact = compact;
+      gSubmitJSONText    = pretty;
+      $("submit_status").textContent = "已生成 tx_human.json（可复制/下载）；下一步可从 JSON 生成 SAFEQR";
+    }catch(e){ $("submit_status").textContent = "错误："+(e.message||e); }
   };
 
-  // 直接从 calldata 生成 SAFEQR（循环）
-  $("btn_qr_from_calldata").onclick = async ()=>{
+  // ===== ② 从 tx_human.json 生成 SAFEQR（循环播放） =====
+  $("btn_make_safeqr").onclick = async ()=>{
     try{
-      const raw = ($("calldata").value || "").trim();
-      if(!raw) throw new Error("没有可用的 calldata");
+      if(!gSubmitJSONCompact){
+        // 若还未点过①，则临时帮忙先构建一次
+        const {compact, pretty} = buildTxHumanJsonFromCalldata();
+        gSubmitJSONCompact = compact;
+        gSubmitJSONText = pretty;
+      }
       const {chunk, gap} = getQRSettings();
-      const built = await buildSafeQRFramesFromText(raw, chunk);
+      const built = await buildSafeQRFramesFromText(gSubmitJSONCompact, chunk);
       QR_FRAMES = built.frames;
       QR_IDX = 0;
       renderQRFrame();
       startQRLoop(gap);
-      $("submit_status").textContent = `已从 calldata 生成 ${QR_FRAMES.length} 帧 SAFEQR（循环播放中），id=${built.id}`;
-    }catch(e){ $("submit_status").textContent="错误："+e.message; }
+      $("submit_status").textContent = `已从 tx_human.json 生成 ${QR_FRAMES.length} 帧 SAFEQR（循环播放中），id=${built.id}`;
+    }catch(e){ $("submit_status").textContent = "错误："+(e.message||e); }
   };
 
   // 复制 & 下载 tx_human.json
   $("btn_copy_json").onclick = async ()=>{
     try{
-      if(!gSubmitJSONText) throw new Error("请先生成提交者 tx_human.json");
+      if(!gSubmitJSONText){ const {pretty} = buildTxHumanJsonFromCalldata(); gSubmitJSONText = pretty; }
       await navigator.clipboard.writeText(gSubmitJSONText);
       $("submit_status").textContent = "已复制 JSON 到剪贴板";
     }catch(e){ $("submit_status").textContent = "复制失败："+e.message; }
   };
   $("btn_download_json").onclick = ()=>{
     try{
-      if(!gSubmitJSONText) throw new Error("请先生成提交者 tx_human.json");
+      if(!gSubmitJSONText){ const {pretty} = buildTxHumanJsonFromCalldata(); gSubmitJSONText = pretty; }
       const blob = new Blob([gSubmitJSONText], {type:"application/json"});
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);

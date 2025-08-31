@@ -30,7 +30,7 @@
   .qrdeck .frame{width:280px;height:280px}
   .qrdeck .controls{display:flex;gap:8px;align-items:center}
 
-  /* 统一扫码样式：大预览 + 中心方框 + 遮罩（电脑/iPad 适配） */
+  /* 摄像头扫码UI */
   .cam-wrap{position:relative;border:1px solid var(--br);border-radius:12px;overflow:hidden;background:#000;margin-top:10px}
   .cam-wrap .preview{position:relative;width:100%;height:80vh;max-height:92vh;min-height:320px}
   .cam-wrap video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
@@ -126,7 +126,6 @@
     <span id="sig_status" class="muted"></span>
   </div>
 
-  <!-- 统一大尺寸扫码框 -->
   <div id="cam_box" class="card" style="display:none">
     <div class="row"><button id="stop_scan" class="ghost">停止扫码</button><span id="scan_status" class="muted"></span></div>
     <div class="cam-wrap">
@@ -153,8 +152,8 @@
   <h2>提交者 tx_human.json & 动态二维码</h2>
 
   <div class="row" style="gap:8px">
-    <button id="btn_make_submit" class="ghost">生成提交者 tx_human.json（动态二维码）</button>
-    <button id="btn_qr_from_calldata" class="ghost">从 calldata 生成 SAFEQR</button>
+    <button id="btn_build_json" class="ghost">① 从 calldata 生成 tx_human.json</button>
+    <button id="btn_make_safeqr" class="ghost">② 从 tx_human.json 生成 SAFEQR（循环）</button>
     <button id="btn_copy_json" class="ghost">复制 JSON</button>
     <button id="btn_download_json" class="ghost">下载 JSON 文件</button>
     <span id="submit_status" class="muted"></span>
