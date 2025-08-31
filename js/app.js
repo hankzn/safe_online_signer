@@ -392,33 +392,21 @@ nonce=${gNonce}`;
     };
   }
 
-  // ===== ① 从 calldata 生成 tx_human.json（查询 nonce + 估算 gas + 压缩 data_hex） =====
+  // ===== ① 从 calldata 生成 tx_human.json（from=Safe，to=内层to，nonce=Safe.nonce，gas=safeTxGas，压缩data_hex） =====
   async function buildTxHumanJsonFromCalldata() {
     const calldataRaw = ($("calldata").value || "").trim();
     if (!calldataRaw) throw new Error("请先生成并填写 calldata（上方“聚合并编码”）");
 
-    // 压缩 calldata 表示
+    // 压缩外层 calldata
     let cleanData = calldataRaw;
-    try {
-      cleanData = ethers.hexlify(ethers.getBytes(calldataRaw));
-    } catch (e) {
-      cleanData = calldataRaw; // 不可解析则保留原值
-    }
+    try { cleanData = ethers.hexlify(ethers.getBytes(calldataRaw)); } catch(_) {}
 
-    // 读取提交者 EOA
-    const sender = ($("sender_eoa").value || "").trim();
-    if (!/^0x[0-9a-fA-F]{40}$/.test(sender)) {
-      throw new Error("请填写有效的“提交者 EOA 地址”");
-    }
-
-    // 选取 Safe 地址：优先 gSafe.target；若未加载，用输入框 safe_addr
-    let safeTo = gSafe?.target;
-    if (!safeTo) {
+    // 必须有 Safe
+    let safeAddr = gSafe?.target;
+    if (!safeAddr) {
       const inputSafe = ($("safe_addr").value || "").trim();
-      if (!/^0x[0-9a-fA-F]{40}$/.test(inputSafe)) {
-        throw new Error("未读取 Safe 信息，且 Safe 地址输入不合法");
-      }
-      safeTo = inputSafe;
+      if (!/^0x[0-9a-fA-F]{40}$/.test(inputSafe)) throw new Error("未读取 Safe 信息，且 Safe 地址输入不合法");
+      safeAddr = inputSafe;
     }
 
     // 确认 RPC / chainId
@@ -428,26 +416,34 @@ nonce=${gNonce}`;
       gChainId = parseInt(chainIdHex, 16);
     }
 
-    // 1) 查询 pending nonce
-    const nonceHex = await rpc(u1, "eth_getTransactionCount", [sender, "pending"]);
-    const nonceDec = parseInt(nonceHex, 16);
-
-    // 2) 估算“外层提交交易”的 gas（from=EOA → to=Safe，data=cleanData）
-    const estimateTx = {
-      from: sender,
-      to: safeTo,
-      data: cleanData,
-      value: "0x0"
-    };
-    let gasEstDec = 0;
+    // 解码 execTransaction，拿到内层 to / value / data / safeTxGas 等
+    let innerTo=safeAddr, innerValue="0", innerData="0x", safeTxGasNum=0, baseGasNum=0, gasPriceNum=0, gasTokenAddr=ZERO, refundAddr=ZERO, op=0;
     try {
-      const gasHex = await rpc(u1, "eth_estimateGas", [estimateTx]);
-      gasEstDec = Math.ceil(parseInt(gasHex, 16) * 1.10); // +10% buffer
-    } catch (e) {
-      gasEstDec = 21000; // 回退
+      const dec = IF_SAFE.decodeFunctionData("execTransaction", cleanData);
+      innerTo = dec[0];
+      innerValue = (dec[1] ?? 0n).toString();
+      innerData = dec[2] ?? "0x";
+      op = Number(dec[3] ?? 0);
+      safeTxGasNum = Number(dec[4] ?? 0);
+      baseGasNum = Number(dec[5] ?? 0);
+      gasPriceNum = Number(dec[6] ?? 0);
+      gasTokenAddr = dec[7] ?? ZERO;
+      refundAddr = dec[8] ?? ZERO;
+    } catch(e) {
+      // 如果无法解码，也不阻塞：保持默认值，至少能导出 JSON/SAFEQR
     }
 
-    // 3) gas 价格：若已选择档位则用之；否则取“中”
+    // 读取 Safe nonce（最新）
+    let safeNonce = gNonce;
+    try {
+      if (gSafe) safeNonce = Number(await gSafe.nonce());
+      else safeNonce = parseInt(await rpc(u1, "eth_call", [{
+        to: safeAddr,
+        data: (new ethers.Interface(window.AppABIs.SAFE_ABI)).encodeFunctionData("nonce",[])
+      },"latest"]),16);
+    } catch(_) {}
+
+    // gas 价格：优先采用已选择的档位；否则取“中”
     let maxFeePerGas_gwei, maxPriorityFeePerGas_gwei;
     if (gGasChoice) {
       maxFeePerGas_gwei = Number(gGasChoice.maxFee_gwei);
@@ -458,19 +454,25 @@ nonce=${gNonce}`;
       maxPriorityFeePerGas_gwei = Number(tiers.mid.priority_gwei.toFixed(2));
     }
 
-    // 4) 组装 tx_human.json（已压缩的 data_hex）
     const h = {
       kind: "ETH",
-      from: sender,
-      to: safeTo,
-      value_wei: 0,
-      amount_eth: "0",
-      data_hex: cleanData,
+      from: safeAddr,                          // ✅ Safe 合约地址
+      to: innerTo,                             // ✅ 内层接收者（构造调用的 to）
+      value_wei: innerValue,                   // 从 execTransaction value 解码
+      amount_eth: ethers.formatEther(innerValue || "0"),
+      data_hex: cleanData,                     // 压缩后的外层 calldata（给提交端直接用）
       chainId: gChainId,
-      nonce: nonceDec,                 // ✅ pending nonce
-      gas: gasEstDec,                  // ✅ 估算 gas (+10%)
-      maxFeePerGas_gwei,               // ✅ 数值
-      maxPriorityFeePerGas_gwei        // ✅ 数值
+      nonce: safeNonce,                        // ✅ Safe.nonce
+      gas: safeTxGasNum,                       // ✅ 使用 safeTxGas
+      // 以下字段保留给提交端（可选）
+      maxFeePerGas_gwei,
+      maxPriorityFeePerGas_gwei,
+      operation: op,
+      baseGas: baseGasNum,
+      gasPrice: gasPriceNum,
+      gasToken: gasTokenAddr,
+      refundReceiver: refundAddr,
+      inner_data_hex: innerData                // 额外附上内层 data，方便校验或展示
     };
 
     const compact = JSON.stringify(h);
@@ -483,7 +485,7 @@ nonce=${gNonce}`;
       const {compact, pretty} = await buildTxHumanJsonFromCalldata();
       gSubmitJSONCompact = compact;
       gSubmitJSONText    = pretty;
-      $("submit_status").textContent = "已生成 tx_human.json（已填 nonce / gas / gasPrice，并压缩 data_hex），可复制/下载，或执行步骤②生成 SAFEQR";
+      $("submit_status").textContent = "已生成 tx_human.json（from=Safe、to=内层to、nonce=Safe.nonce、gas=safeTxGas，data已压缩），可复制/下载，或执行步骤②生成 SAFEQR";
     }catch(e){ $("submit_status").textContent = "错误："+(e.message||e); }
   };
 
