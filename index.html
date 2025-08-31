@@ -159,6 +159,13 @@
     <span id="submit_status" class="muted"></span>
   </div>
 
+  <!-- 新增：提交者EOA输入，用于查询nonce与估gas -->
+  <div class="row" style="gap:8px">
+    <label style="flex:1">提交者 EOA 地址
+      <input id="sender_eoa" type="text" placeholder="0x 提交者外层交易地址，用于查询 nonce / 估 gas"/>
+    </label>
+  </div>
+
   <div class="row" style="gap:8px">
     <label style="max-width:220px">每帧最大字节<input id="qr_chunk" type="number" value="900" min="200" max="2000"/></label>
     <label style="max-width:220px">播放间隔(ms)<input id="qr_interval" type="number" value="700" min="200" step="50"/></label>

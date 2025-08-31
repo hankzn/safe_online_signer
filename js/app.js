@@ -264,7 +264,10 @@ nonce=${gNonce}`;
   // Gas 档位
   function toGwei(n){ return Number(ethers.formatUnits(n, "gwei")); }
   async function getGasTiers(){
-    if(!gProvider) throw new Error("请先读取 Safe 信息");
+    if(!gProvider){
+      const [u1] = requireRPCs();
+      gProvider = new ethers.JsonRpcProvider(u1);
+    }
     try{
       const BLOCKS=30, PCTS=[25,50,90];
       const hist = await gProvider.send("eth_feeHistory", [ "0x"+BLOCKS.toString(16), "latest", PCTS ]);
@@ -389,38 +392,98 @@ nonce=${gNonce}`;
     };
   }
 
-  // ===== ① 从 calldata 生成 tx_human.json =====
-  function buildTxHumanJsonFromCalldata(){
-    const calldata = ($("calldata").value || "").trim();
-    if(!calldata) throw new Error("请先生成并填写 calldata（上方“聚合并编码”）");
-    const gasFields = gGasChoice
-      ? { maxFeePerGas_gwei:Number(gGasChoice.maxFee_gwei?.toFixed?.(2)??gGasChoice.maxFee_gwei),
-          maxPriorityFeePerGas_gwei:Number(gGasChoice.priority_gwei?.toFixed?.(2)??gGasChoice.priority_gwei) }
-      : { maxFeePerGas_gwei:"根据网络估算", maxPriorityFeePerGas_gwei:"根据网络估算" };
+  // ===== ① 从 calldata 生成 tx_human.json（查询 nonce + 估算 gas + 压缩 data_hex） =====
+  async function buildTxHumanJsonFromCalldata() {
+    const calldataRaw = ($("calldata").value || "").trim();
+    if (!calldataRaw) throw new Error("请先生成并填写 calldata（上方“聚合并编码”）");
 
-    const h={
-      kind:"ETH",
-      from:"提交者 EOA（由离线端推导）",
-      to:gSafe?.target || "0xSafeAddress",
-      value_wei:0,
-      amount_eth:"0",
-      data_hex:calldata,
-      chainId:gChainId,
-      nonce:"提交者EOA当前nonce（下方工具可查）",
-      gas:"建议估算填写",
-      ...gasFields
+    // 压缩 calldata 表示
+    let cleanData = calldataRaw;
+    try {
+      cleanData = ethers.hexlify(ethers.getBytes(calldataRaw));
+    } catch (e) {
+      cleanData = calldataRaw; // 不可解析则保留原值
+    }
+
+    // 读取提交者 EOA
+    const sender = ($("sender_eoa").value || "").trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(sender)) {
+      throw new Error("请填写有效的“提交者 EOA 地址”");
+    }
+
+    // 选取 Safe 地址：优先 gSafe.target；若未加载，用输入框 safe_addr
+    let safeTo = gSafe?.target;
+    if (!safeTo) {
+      const inputSafe = ($("safe_addr").value || "").trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(inputSafe)) {
+        throw new Error("未读取 Safe 信息，且 Safe 地址输入不合法");
+      }
+      safeTo = inputSafe;
+    }
+
+    // 确认 RPC / chainId
+    const [u1] = requireRPCs();
+    if (!gChainId) {
+      const chainIdHex = await rpc(u1, "eth_chainId", []);
+      gChainId = parseInt(chainIdHex, 16);
+    }
+
+    // 1) 查询 pending nonce
+    const nonceHex = await rpc(u1, "eth_getTransactionCount", [sender, "pending"]);
+    const nonceDec = parseInt(nonceHex, 16);
+
+    // 2) 估算“外层提交交易”的 gas（from=EOA → to=Safe，data=cleanData）
+    const estimateTx = {
+      from: sender,
+      to: safeTo,
+      data: cleanData,
+      value: "0x0"
     };
+    let gasEstDec = 0;
+    try {
+      const gasHex = await rpc(u1, "eth_estimateGas", [estimateTx]);
+      gasEstDec = Math.ceil(parseInt(gasHex, 16) * 1.10); // +10% buffer
+    } catch (e) {
+      gasEstDec = 21000; // 回退
+    }
+
+    // 3) gas 价格：若已选择档位则用之；否则取“中”
+    let maxFeePerGas_gwei, maxPriorityFeePerGas_gwei;
+    if (gGasChoice) {
+      maxFeePerGas_gwei = Number(gGasChoice.maxFee_gwei);
+      maxPriorityFeePerGas_gwei = Number(gGasChoice.priority_gwei);
+    } else {
+      const tiers = await getGasTiers();
+      maxFeePerGas_gwei = Number(tiers.mid.maxFee_gwei.toFixed(2));
+      maxPriorityFeePerGas_gwei = Number(tiers.mid.priority_gwei.toFixed(2));
+    }
+
+    // 4) 组装 tx_human.json（已压缩的 data_hex）
+    const h = {
+      kind: "ETH",
+      from: sender,
+      to: safeTo,
+      value_wei: 0,
+      amount_eth: "0",
+      data_hex: cleanData,
+      chainId: gChainId,
+      nonce: nonceDec,                 // ✅ pending nonce
+      gas: gasEstDec,                  // ✅ 估算 gas (+10%)
+      maxFeePerGas_gwei,               // ✅ 数值
+      maxPriorityFeePerGas_gwei        // ✅ 数值
+    };
+
     const compact = JSON.stringify(h);
     const pretty  = JSON.stringify(h, null, 2);
-    return {compact, pretty};
+    return { compact, pretty };
   }
 
-  $("btn_build_json").onclick = ()=>{
+  $("btn_build_json").onclick = async ()=>{
     try{
-      const {compact, pretty} = buildTxHumanJsonFromCalldata();
+      const {compact, pretty} = await buildTxHumanJsonFromCalldata();
       gSubmitJSONCompact = compact;
       gSubmitJSONText    = pretty;
-      $("submit_status").textContent = "已生成 tx_human.json（可复制/下载）；下一步可从 JSON 生成 SAFEQR";
+      $("submit_status").textContent = "已生成 tx_human.json（已填 nonce / gas / gasPrice，并压缩 data_hex），可复制/下载，或执行步骤②生成 SAFEQR";
     }catch(e){ $("submit_status").textContent = "错误："+(e.message||e); }
   };
 
@@ -428,8 +491,7 @@ nonce=${gNonce}`;
   $("btn_make_safeqr").onclick = async ()=>{
     try{
       if(!gSubmitJSONCompact){
-        // 若还未点过①，则临时帮忙先构建一次
-        const {compact, pretty} = buildTxHumanJsonFromCalldata();
+        const {compact, pretty} = await buildTxHumanJsonFromCalldata();
         gSubmitJSONCompact = compact;
         gSubmitJSONText = pretty;
       }
@@ -443,17 +505,17 @@ nonce=${gNonce}`;
     }catch(e){ $("submit_status").textContent = "错误："+(e.message||e); }
   };
 
-  // 复制 & 下载 tx_human.json
+  // 复制 & 下载 tx_human.json（必要时自动先构建一次）
   $("btn_copy_json").onclick = async ()=>{
     try{
-      if(!gSubmitJSONText){ const {pretty} = buildTxHumanJsonFromCalldata(); gSubmitJSONText = pretty; }
+      if(!gSubmitJSONText){ const {pretty} = await buildTxHumanJsonFromCalldata(); gSubmitJSONText = pretty; }
       await navigator.clipboard.writeText(gSubmitJSONText);
       $("submit_status").textContent = "已复制 JSON 到剪贴板";
     }catch(e){ $("submit_status").textContent = "复制失败："+e.message; }
   };
-  $("btn_download_json").onclick = ()=>{
+  $("btn_download_json").onclick = async ()=>{
     try{
-      if(!gSubmitJSONText){ const {pretty} = buildTxHumanJsonFromCalldata(); gSubmitJSONText = pretty; }
+      if(!gSubmitJSONText){ const {pretty} = await buildTxHumanJsonFromCalldata(); gSubmitJSONText = pretty; }
       const blob = new Blob([gSubmitJSONText], {type:"application/json"});
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
