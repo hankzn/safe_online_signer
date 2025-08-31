@@ -1,22 +1,18 @@
 // js/app.js
 (function(){
-  // ---------- DOM 快捷 ----------
   const $ = (id)=> document.getElementById(id);
   const byName = (name)=> document.querySelector(`[name="${name}"]:checked`);
   const ZERO = "0x0000000000000000000000000000000000000000";
 
-  // ---------- ethers 接口 ----------
-  const { ethers } = window;  // 依赖 ./libs/ethers.umd.min.js
+  const { ethers } = window;
   const IF_SAFE = new ethers.Interface(window.AppABIs.SAFE_ABI);
   const IF_ERC20 = new ethers.Interface(window.AppABIs.ERC20_ABI);
 
-  // ---------- 全局状态 ----------
   let gChainId=null, gProvider=null, gSafe=null, gOwners=[], gThreshold=0, gNonce=0;
   let gDomain=null, gTypes=null, gMessage=null, gHash=null, gSigs=[];
   let gGasChoice=null;
   let gSubmitJSONText="";
 
-  // ---------- 通用 RPC ----------
   async function rpc(url, method, params=[]){
     const body = JSON.stringify({ jsonrpc:"2.0", id:Date.now(), method, params });
     const r = await fetch(url, { method:"POST", headers:{ "content-type":"application/json" }, body });
@@ -30,7 +26,6 @@
     return [u1,u2];
   }
 
-  // ---------- UI 切换 ----------
   function switchKind(){
     const k=byName("kind").value;
     $("eth_box").classList.toggle("hidden", k!=="ETH");
@@ -39,7 +34,7 @@
   Array.from(document.getElementsByName("kind")).forEach(r=> r.addEventListener("change", switchKind));
   switchKind();
 
-  // ---------- 摄像头工具（统一方框） ----------
+  // 摄像头扫码（签名）
   let scanStream=null, rafId=null;
   async function openCamera(videoEl){
     const constraints={ audio:false, video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}, aspectRatio:{ideal:16/9} } };
@@ -58,14 +53,13 @@
     $("video").srcObject=null; $("cam_box").style.display="none";
   }
 
-  // ---------- Safe 基本信息 ----------
+  // Safe 基本信息
   $("btn_load").onclick=async ()=>{
     try{
       const [u1] = requireRPCs();
       const addr = $("safe_addr").value.trim();
       if(!/^0x[0-9a-fA-F]{40}$/.test(addr)) throw new Error("Safe 地址不合法");
 
-      // ethers v6：可直接用 JsonRpcProvider(url)
       gProvider = new ethers.JsonRpcProvider(u1);
       const chainIdHex = await rpc(u1, "eth_chainId", []);
       gChainId = parseInt(chainIdHex, 16);
@@ -96,13 +90,12 @@ nonce=${gNonce}`;
     }catch(e){ $("build_status").textContent="错误："+e.message; }
   };
 
-  // ---------- 构造调用 & 估算 safeTxGas ----------
+  // 构造调用 & 估算
   function decimalToSmallestStr(amountStr,decimals){
     if(!/^\d+(\.\d+)?$/.test(amountStr)) throw new Error("金额格式应为非负小数");
     const [i,f=""]=amountStr.split(".");
     if(f.length>decimals) throw new Error("小数位超过 decimals");
     const s=(i+f.padEnd(decimals,"0")).replace(/^0+/,"")||"0";
-    // 校验可转为 BigInt
     BigInt(s);
     return s;
   }
@@ -112,7 +105,7 @@ nonce=${gNonce}`;
       const to=$("eth_to").value.trim();
       const amt=$("eth_amount").value.trim();
       if(!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error("ETH 收款地址不合法");
-      const valueWei = ethers.parseUnits(amt||"0","ether"); // BigInt
+      const valueWei = ethers.parseUnits(amt||"0","ether");
       return { to, value:valueWei, data:"0x" };
     }else{
       const token=$("erc_token").value.trim();
@@ -140,7 +133,7 @@ nonce=${gNonce}`;
     }catch(e){ $("build_status").textContent="错误："+e.message; }
   };
 
-  // ---------- 生成 EIP-712 ----------
+  // 生成 EIP-712
   $("btn_build_712").onclick=()=>{
     try{
       if(!gSafe) throw new Error("请先读取 Safe 信息");
@@ -168,7 +161,7 @@ nonce=${gNonce}`;
       ]};
       const message={
         to:call.to,
-        value:call.value.toString(), // v6: BigInt to string 十进制
+        value:call.value.toString(),
         data:call.data,
         operation:op,
         safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce
@@ -187,7 +180,7 @@ nonce=${gNonce}`;
     }catch(e){ $("build_status").textContent="错误："+e.message; }
   };
 
-  // ---------- 签名收集 / 聚合 ----------
+  // 签名收集
   $("btn_scan_sig").onclick=async ()=>{
     $("cam_box").style.display="";
     $("scan_status").textContent="启动摄像头…";
@@ -228,7 +221,6 @@ nonce=${gNonce}`;
       if(!/^0x[0-9a-fA-F]+$/.test(sigHex) || sigHex.length<130) throw new Error("签名格式不正确");
       const signer=ethers.getAddress(ethers.verifyTypedData(gDomain,gTypes,gMessage,sigHex));
       gSigs.push({signer, sig:sigHex});
-      // 去重：后者覆盖前者
       const map=new Map(); gSigs.forEach(x=> map.set(x.signer.toLowerCase(), x));
       gSigs=Array.from(map.values());
 
@@ -240,19 +232,17 @@ nonce=${gNonce}`;
   }
 
   function packSignatures(list){
-    // Gnosis Safe 需要按 signer 地址升序拼接
     const sorted=list.slice().sort((a,b)=> a.signer.toLowerCase() < b.signer.toLowerCase() ? -1 : 1);
     let packed="0x";
     for(const s of sorted){
       const sig=ethers.Signature.from(s.sig);
       const r=sig.r.replace(/^0x/,'').padStart(64,'0');
       const S=sig.s.replace(/^0x/,'').padStart(64,'0');
-      let v=Number(sig.v); if(v===0||v===1) v+=27; // 兼容 EIP-155
+      let v=Number(sig.v); if(v===0||v===1) v+=27;
       packed+= r + S + v.toString(16).padStart(2,'0');
     }
     return packed;
   }
-
   $("btn_assemble").onclick=()=>{
     try{
       if(!gSafe||!gMessage) throw new Error("缺少 Safe 或 EIP-712 消息");
@@ -268,7 +258,7 @@ nonce=${gNonce}`;
     }catch(e){ $("asm_status").textContent="错误："+e.message; }
   };
 
-  // ---------- Gas 档位（含“应用”） ----------
+  // Gas 档位
   function toGwei(n){ return Number(ethers.formatUnits(n, "gwei")); }
   async function getGasTiers(){
     if(!gProvider) throw new Error("请先读取 Safe 信息");
@@ -285,7 +275,6 @@ nonce=${gNonce}`;
         high: { tier:"高",  baseFee_gwei:base, priority_gwei:p90, maxFee_gwei: base*1.50 + p90 },
       };
     }catch(e){
-      // 兜底：部分兼容节点无 feeHistory
       const [block, tipHex] = await Promise.all([ gProvider.getBlock("latest"), gProvider.send("eth_maxPriorityFeePerGas", []) ]);
       if(!block || block.baseFeePerGas==null) throw new Error("无法获取 baseFeePerGas");
       const base=toGwei(block.baseFeePerGas), tip=Number(ethers.formatUnits(tipHex, "gwei"));
@@ -296,7 +285,6 @@ nonce=${gNonce}`;
       };
     }
   }
-
   $("btn_gas_est").onclick = async ()=>{
     try{
       const tiers=await getGasTiers();
@@ -335,29 +323,70 @@ nonce=${gNonce}`;
     }
   };
 
-  // ---------- 提交者 tx_human.json & SAFEQR 动态二维码 ----------
+  // ===== SAFEQR 动态二维码（循环播放） =====
   async function sha256Hex(str){
     const bytes = new TextEncoder().encode(str);
     const hash = await crypto.subtle.digest("SHA-256", bytes);
     return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
   }
-  function splitFrames(text, maxLen){ const frames=[]; for(let i=0;i<text.length;i+=maxLen){ frames.push(text.slice(i,i+maxLen)); } return frames; }
+  function splitFrames(text, maxLen){
+    const frames=[]; for(let i=0;i<text.length;i+=maxLen){ frames.push(text.slice(i,i+maxLen)); } return frames;
+  }
 
   let QR_FRAMES=[], QR_IDX=0, QR_TIMER=null;
   function stopQRPlay(){ if(QR_TIMER){ clearInterval(QR_TIMER); QR_TIMER=null; } }
   function renderQRFrame(){
     const div=$("qr_submit"); div.innerHTML="";
-    if(!QR_FRAMES.length) { $("qr_nav").classList.add("hidden"); return; }
+    if(!QR_FRAMES.length){ $("qr_nav").classList.add("hidden"); $("qr_info").textContent="0 / 0"; return; }
     new QRCode(div,{text:QR_FRAMES[QR_IDX],width:260,height:260,colorDark:"#000",colorLight:"#fff",correctLevel:QRCode.CorrectLevel.M});
     $("qr_info").textContent = `${QR_IDX+1} / ${QR_FRAMES.length}`;
     $("qr_nav").classList.remove("hidden");
   }
-  $("qr_prev").onclick=()=>{ if(QR_FRAMES.length){ QR_IDX=(QR_IDX-1+QR_FRAMES.length)%QR_FRAMES.length; renderQRFrame(); } };
-  $("qr_next").onclick=()=>{ if(QR_FRAMES.length){ QR_IDX=(QR_IDX+1)%QR_FRAMES.length; renderQRFrame(); } };
-  $("qr_pause").onclick=()=>{ stopQRPlay(); $("qr_pause").classList.add("hidden"); $("qr_play").classList.remove("hidden"); };
-  $("qr_play").onclick =()=>{ if(QR_FRAMES.length && !QR_TIMER){ QR_TIMER=setInterval(()=>{ $("qr_next").click(); }, 700);
-                               $("qr_play").classList.add("hidden"); $("qr_pause").classList.remove("hidden"); } };
+  function getQRSettings(){
+    const chunk = Math.max(200, Math.min(2000, Number($("qr_chunk").value) || 900));
+    const gap   = Math.max(200, Number($("qr_interval").value) || 700);
+    return {chunk, gap};
+  }
+  function startQRLoop(gap){
+    stopQRPlay();
+    if(!QR_FRAMES.length) return;
+    QR_TIMER = setInterval(()=>{
+      if(!QR_FRAMES.length) return;
+      QR_IDX = (QR_IDX + 1) % QR_FRAMES.length;
+      renderQRFrame();
+    }, gap);
+    $("qr_pause").classList.remove("hidden");
+    $("qr_play").classList.add("hidden");
+  }
 
+  $("qr_prev").onclick=()=>{ if(!QR_FRAMES.length) return; stopQRPlay(); QR_IDX=(QR_IDX-1+QR_FRAMES.length)%QR_FRAMES.length; renderQRFrame(); $("qr_pause").classList.add("hidden"); $("qr_play").classList.remove("hidden"); };
+  $("qr_next").onclick=()=>{ if(!QR_FRAMES.length) return; stopQRPlay(); QR_IDX=(QR_IDX+1)%QR_FRAMES.length; renderQRFrame(); $("qr_pause").classList.add("hidden"); $("qr_play").classList.remove("hidden"); };
+  $("qr_pause").onclick=()=>{ stopQRPlay(); $("qr_pause").classList.add("hidden"); $("qr_play").classList.remove("hidden"); };
+  $("qr_play").onclick =()=>{ if(!QR_FRAMES.length || QR_TIMER) return; const {gap}=getQRSettings(); startQRLoop(gap); };
+
+  $("btn_copy_qr_one").onclick = async ()=>{
+    if(!QR_FRAMES.length) return;
+    try{ await navigator.clipboard.writeText(QR_FRAMES[QR_IDX]); $("submit_status").textContent = "已复制当前帧"; }
+    catch(e){ $("submit_status").textContent = "复制失败："+(e.message||e); }
+  };
+  $("btn_copy_qr_all").onclick = async ()=>{
+    if(!QR_FRAMES.length) { $("submit_status").textContent = "还没有生成帧"; return; }
+    try{ await navigator.clipboard.writeText(QR_FRAMES.join("\n")); $("submit_status").textContent = `已复制全部 ${QR_FRAMES.length} 帧`; }
+    catch(e){ $("submit_status").textContent = "复制失败："+(e.message||e); }
+  };
+
+  async function buildSafeQRFramesFromText(text, chunk){
+    const fullHash = await sha256Hex(text);
+    const sessionId = fullHash.slice(0,16);
+    const parts = (text.length<=chunk) ? [text] : splitFrames(text, chunk);
+    const n = parts.length;
+    return {
+      id: sessionId,
+      frames: parts.map((data,i)=> JSON.stringify({ t:"SAFEQR", v:1, id:sessionId, i, n, sum:sessionId, data }))
+    };
+  }
+
+  // 从 tx_human.json 生成 SAFEQR（循环）
   $("btn_make_submit").onclick=async ()=>{
     try{
       if(!$("calldata").value) throw new Error("请先聚合并编码 calldata");
@@ -369,7 +398,7 @@ nonce=${gNonce}`;
       const h={
         kind:"ETH",
         from:"提交者 EOA（由离线端推导）",
-        to:gSafe.target,
+        to:gSafe?.target || "0xSafeAddress",
         value_wei:0,
         amount_eth:"0",
         data_hex:$("calldata").value,
@@ -379,27 +408,37 @@ nonce=${gNonce}`;
         ...gasFields
       };
 
-      const compact = JSON.stringify(h);     // 参与 hash 的原文（稳定键名）
+      const compact = JSON.stringify(h);     // 用紧凑串参与哈希与分片
       gSubmitJSONText = JSON.stringify(h, null, 2);
 
-      const fullHash = await sha256Hex(compact);
-      const sessionId = fullHash.slice(0,16);
-      const CHUNK = 900;
-      const parts = (compact.length<=CHUNK) ? [compact] : splitFrames(compact, CHUNK);
-      const n = parts.length;
+      const {chunk, gap} = getQRSettings();
+      const built = await buildSafeQRFramesFromText(compact, chunk);
 
-      QR_FRAMES = parts.map((data,i)=> JSON.stringify({ t:"SAFEQR", v:1, id:sessionId, i, n, sum:fullHash.slice(0,16), data }));
-      QR_IDX=0; renderQRFrame();
+      QR_FRAMES = built.frames;
+      QR_IDX = 0;
+      renderQRFrame();
+      startQRLoop(gap);
 
-      stopQRPlay();
-      QR_TIMER=setInterval(()=>{ $("qr_next").click(); }, 700);
-      $("qr_pause").classList.remove("hidden"); $("qr_play").classList.add("hidden");
-
-      $("submit_status").textContent = `已生成 ${n} 帧 SAFEQR（动态播放中）`;
+      $("submit_status").textContent = `已生成 ${QR_FRAMES.length} 帧 SAFEQR（循环播放中），id=${built.id}`;
     }catch(e){ $("submit_status").textContent="错误："+e.message; }
   };
 
-  // 复制 & 下载
+  // 直接从 calldata 生成 SAFEQR（循环）
+  $("btn_qr_from_calldata").onclick = async ()=>{
+    try{
+      const raw = ($("calldata").value || "").trim();
+      if(!raw) throw new Error("没有可用的 calldata");
+      const {chunk, gap} = getQRSettings();
+      const built = await buildSafeQRFramesFromText(raw, chunk);
+      QR_FRAMES = built.frames;
+      QR_IDX = 0;
+      renderQRFrame();
+      startQRLoop(gap);
+      $("submit_status").textContent = `已从 calldata 生成 ${QR_FRAMES.length} 帧 SAFEQR（循环播放中），id=${built.id}`;
+    }catch(e){ $("submit_status").textContent="错误："+e.message; }
+  };
+
+  // 复制 & 下载 tx_human.json
   $("btn_copy_json").onclick = async ()=>{
     try{
       if(!gSubmitJSONText) throw new Error("请先生成提交者 tx_human.json");
@@ -419,7 +458,7 @@ nonce=${gNonce}`;
     }catch(e){ $("submit_status").textContent = "下载失败："+e.message; }
   };
 
-  // ---------- 广播 / Nonce / 浏览器 ----------
+  // 广播 / Nonce / 浏览器
   $("btn_broadcast").onclick=async ()=>{
     try{
       const [u1,u2]=requireRPCs();
@@ -473,8 +512,5 @@ nonce=${gNonce}`;
       window.open(base+"/address/"+a,"_blank");
     }catch(e){ $("aux_status").textContent="错误："+e.message; }
   };
-
-  // ---------- 绑定“复制/下载”按钮的可见性补丁 ----------
-  // 初始隐藏播放控制，生成二维码时再显（已在 renderQRFrame 中处理）
 
 })();

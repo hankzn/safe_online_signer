@@ -8,6 +8,5 @@
   ];
   const ERC20_ABI = [ "function transfer(address to,uint256 amount) returns (bool)" ];
 
-  // 暴露到全局
   global.AppABIs = { SAFE_ABI, ERC20_ABI };
 })(window);

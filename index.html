@@ -30,6 +30,7 @@
   .qrdeck .frame{width:280px;height:280px}
   .qrdeck .controls{display:flex;gap:8px;align-items:center}
 
+  /* 统一扫码样式：大预览 + 中心方框 + 遮罩（电脑/iPad 适配） */
   .cam-wrap{position:relative;border:1px solid var(--br);border-radius:12px;overflow:hidden;background:#000;margin-top:10px}
   .cam-wrap .preview{position:relative;width:100%;height:80vh;max-height:92vh;min-height:320px}
   .cam-wrap video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
@@ -150,11 +151,18 @@
 <!-- 提交者 tx_human.json & 动态二维码 -->
 <div class="card">
   <h2>提交者 tx_human.json & 动态二维码</h2>
+
   <div class="row" style="gap:8px">
     <button id="btn_make_submit" class="ghost">生成提交者 tx_human.json（动态二维码）</button>
+    <button id="btn_qr_from_calldata" class="ghost">从 calldata 生成 SAFEQR</button>
     <button id="btn_copy_json" class="ghost">复制 JSON</button>
     <button id="btn_download_json" class="ghost">下载 JSON 文件</button>
     <span id="submit_status" class="muted"></span>
+  </div>
+
+  <div class="row" style="gap:8px">
+    <label style="max-width:220px">每帧最大字节<input id="qr_chunk" type="number" value="900" min="200" max="2000"/></label>
+    <label style="max-width:220px">播放间隔(ms)<input id="qr_interval" type="number" value="700" min="200" step="50"/></label>
   </div>
 
   <div class="qrdeck">
@@ -165,6 +173,8 @@
       <button id="qr_next" class="ghost">下一帧</button>
       <button id="qr_pause" class="ghost">暂停</button>
       <button id="qr_play" class="ghost hidden">继续</button>
+      <button id="btn_copy_qr_one" class="ghost">复制当前帧</button>
+      <button id="btn_copy_qr_all" class="ghost">复制全部帧</button>
     </div>
   </div>
 
