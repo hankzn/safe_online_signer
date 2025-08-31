@@ -183,7 +183,7 @@ nonce=${gNonce}`;
     }catch(e){ $("build_status").textContent="错误："+e.message; }
   };
 
-  // 签名收集
+  // 签名收集（扫码签名）
   $("btn_scan_sig").onclick=async ()=>{
     $("cam_box").style.display="";
     $("scan_status").textContent="启动摄像头…";
@@ -210,6 +210,41 @@ nonce=${gNonce}`;
     }catch(e){ $("scan_status").textContent="摄像头失败："+e.message; }
   };
   $("stop_scan").onclick=stopScan;
+
+  // ★★★ 新增：扫码 RawTx 并自动填入（复用同一正方形扫描框） ★★★
+  $("btn_scan_rawtx").onclick = async ()=>{
+    // 若之前正在扫码，先停止，避免并发
+    try { stopScan(); } catch(_) {}
+    $("cam_box").style.display="";
+    $("scan_status").textContent="启动摄像头…";
+    try{
+      const video=$("video"), canvas=$("canvas");
+      scanStream=await openCamera(video);
+      $("scan_status").textContent="请将二维码置于白色框内（RawTx）";
+      const ctx=canvas.getContext("2d");
+      const tick=()=>{
+        if(!video.videoWidth){ rafId=requestAnimationFrame(tick); return; }
+        const {sx,sy,s,dx,dy,w,h}=prepSquareFrame(video,canvas);
+        ctx.drawImage(video, sx,sy,s,s, dx,dy,w,h);
+        const img=ctx.getImageData(0,0,w,h);
+        const code=jsQR(img.data,w,h,{inversionAttempts:"attemptBoth"});
+        if(code && code.data){
+          const t=(code.data||"").trim();
+          // RawTx 常为 0x + RLP 编码十六进制串，长度通常 > 100
+          if(/^0x[0-9a-fA-F]+$/.test(t) && t.length>100){
+            $("rawtx").value = t;
+            $("bc_status").textContent = "已填入 RawTx（扫码）";
+            stopScan();
+            return;
+          }
+        }
+        rafId=requestAnimationFrame(tick);
+      };
+      tick();
+    }catch(e){
+      $("scan_status").textContent="摄像头失败："+(e && e.message ? e.message : e);
+    }
+  };
 
   $("btn_add_sig").onclick=()=> addSigHex(($("sig_hex").value||"").trim());
 
@@ -430,7 +465,7 @@ nonce=${gNonce}`;
       gasTokenAddr = dec[7] ?? ZERO;
       refundAddr = dec[8] ?? ZERO;
     } catch(e) {
-      // 如果无法解码，也不阻塞：保持默认值，至少能导出 JSON/SAFEQR
+      // 无法解码也不阻塞
     }
 
     // 读取 Safe nonce（最新）
@@ -456,15 +491,14 @@ nonce=${gNonce}`;
 
     const h = {
       kind: "ETH",
-      from: safeAddr,                          // ✅ Safe 合约地址
-      to: innerTo,                             // ✅ 内层接收者（构造调用的 to）
-      value_wei: innerValue,                   // 从 execTransaction value 解码
+      from: safeAddr,
+      to: innerTo,
+      value_wei: innerValue,
       amount_eth: ethers.formatEther(innerValue || "0"),
-      data_hex: cleanData,                     // 压缩后的外层 calldata（给提交端直接用）
+      data_hex: cleanData,
       chainId: gChainId,
-      nonce: safeNonce,                        // ✅ Safe.nonce
-      gas: safeTxGasNum,                       // ✅ 使用 safeTxGas
-      // 以下字段保留给提交端（可选）
+      nonce: safeNonce,
+      gas: safeTxGasNum,
       maxFeePerGas_gwei,
       maxPriorityFeePerGas_gwei,
       operation: op,
@@ -472,7 +506,7 @@ nonce=${gNonce}`;
       gasPrice: gasPriceNum,
       gasToken: gasTokenAddr,
       refundReceiver: refundAddr,
-      inner_data_hex: innerData                // 额外附上内层 data，方便校验或展示
+      inner_data_hex: innerData
     };
 
     const compact = JSON.stringify(h);
