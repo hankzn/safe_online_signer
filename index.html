@@ -149,12 +149,11 @@
   <label>calldata<textarea id="calldata" readonly></textarea></label>
 </div>
 
-<!-- 提交者 tx_human.json & 多帧二维码 -->
+<!-- 提交者 tx_human.json & 动态二维码 -->
 <div class="card">
-  <h2>提交者 tx_human.json & 二维码</h2>
+  <h2>提交者 tx_human.json & 动态二维码</h2>
   <div class="row" style="gap:8px">
-    <button id="btn_make_submit" class="ghost">生成提交者 tx_human.json（二维码）</button>
-    <label class="inline"><input type="checkbox" id="compact_keys"/> 使用紧凑JSON键名</label>
+    <button id="btn_make_submit" class="ghost">生成提交者 tx_human.json（动态二维码）</button>
     <button id="btn_copy_json" class="ghost">复制 JSON</button>
     <button id="btn_download_json" class="ghost">下载 JSON 文件</button>
     <span id="submit_status" class="muted"></span>
@@ -166,8 +165,8 @@
       <button id="qr_prev" class="ghost">上一帧</button>
       <span id="qr_info" class="muted">0 / 0</span>
       <button id="qr_next" class="ghost">下一帧</button>
-      <button id="qr_play" class="ghost">自动播放</button>
-      <button id="qr_pause" class="ghost hidden">暂停</button>
+      <button id="qr_pause" class="ghost">暂停</button>
+      <button id="qr_play" class="ghost hidden">继续</button>
     </div>
   </div>
 
@@ -220,7 +219,7 @@
     if(!u1||!u2) throw new Error("请先填写两条 RPC");
     return [u1,u2];
   }
-  const byName=name=>document.querySelector(`[name="${name}"]:checked`);
+  const byName=name=>document.querySelector(\`[name="\${name}"]:checked\`);
   function switchKind(){ const k=byName("kind").value; $("eth_box").classList.toggle("hidden",k!=="ETH"); $("erc_box").classList.toggle("hidden",k!=="ERC20"); }
   Array.from(document.getElementsByName("kind")).forEach(r=> r.addEventListener("change",switchKind)); switchKind();
 
@@ -259,7 +258,7 @@
       gNonce=Number(await gSafe.nonce());
       $("nonce").value=gNonce;
       $("net_status").textContent="读取成功";
-      $("safe_info").textContent=`chainId=${gChainId}\nowners=${JSON.stringify(gOwners,null,2)}\nthreshold=${gThreshold}\nnonce=${gNonce}`;
+      $("safe_info").textContent=\`chainId=\${gChainId}\nowners=\${JSON.stringify(gOwners,null,2)}\nthreshold=\${gThreshold}\nnonce=\${gNonce}\`;
     }catch(e){ $("net_status").textContent="错误："+e.message; $("safe_info").textContent=""; }
   };
 
@@ -303,7 +302,7 @@
       const tx={ from:gSafe.target, to:call.to, data:call.data, value:"0x"+BigInt(call.value||0n).toString(16) };
       const gasHex=await rpc(u1,"eth_estimateGas",[tx]); const gas=parseInt(gasHex,16);
       const withBuf=Math.ceil(gas*1.1); $("safeTxGas").value=withBuf;
-      $("build_status").textContent=`estimateGas: ${gas} → +10% = ${withBuf}`;
+      $("build_status").textContent=\`estimateGas: \${gas} → +10% = \${withBuf}\`;
     }catch(e){ $("build_status").textContent="错误："+e.message; }
   };
 
@@ -409,7 +408,7 @@
   $("btn_assemble").onclick=()=>{
     try{
       if(!gSafe||!gMessage) throw new Error("缺少 Safe 或 EIP-712 消息");
-      if(gSigs.length<gThreshold) throw new Error(`签名不足：${gSigs.length}/${gThreshold}`);
+      if(gSigs.length<gThreshold) throw new Error(\`签名不足：\${gSigs.length}/\${gThreshold}\`);
       const signatures=packSignatures(gSigs);
       const data=IF_SAFE.encodeFunctionData("execTransaction",[
         gMessage.to, gMessage.value, gMessage.data, gMessage.operation,
@@ -486,36 +485,26 @@
     }
   };
 
-  // ===== 生成提交者 tx_human.json（多帧QR）=====
+  // ===== 生成提交者 tx_human.json（标准键名 + 动态 SAFEQR）=====
   async function sha256Hex(str){
     const bytes = new TextEncoder().encode(str);
     const hash = await crypto.subtle.digest("SHA-256", bytes);
     return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
-  }
-  function minifyTxHuman(obj, compact){
-    if(!compact) return JSON.stringify(obj);
-    const map={kind:"k",from:"f",to:"t",value_wei:"vw",amount_eth:"ae",data_hex:"d",chainId:"c",nonce:"n",gas:"g",maxFeePerGas_gwei:"mf",maxPriorityFeePerGas_gwei:"mp"};
-    const o={}; for(const k in obj){ const v=obj[k]; if(v!==undefined) o[map[k]||k]=v; }
-    return JSON.stringify(o);
   }
   function splitFrames(text, maxLen){ const frames=[]; for(let i=0;i<text.length;i+=maxLen){ frames.push(text.slice(i,i+maxLen)); } return frames; }
   let QR_FRAMES=[], QR_IDX=0, QR_TIMER=null;
   function stopQRPlay(){ if(QR_TIMER){ clearInterval(QR_TIMER); QR_TIMER=null; } }
   function renderQRFrame(){
     const div=$("qr_submit"); div.innerHTML="";
-    if(QR_FRAMES.length===1){
-      new QRCode(div,{text:QR_FRAMES[0],width:260,height:260,colorDark:"#000",colorLight:"#fff",correctLevel:QRCode.CorrectLevel.M});
-      $("qr_nav").classList.add("hidden");
-    }else{
-      new QRCode(div,{text:QR_FRAMES[QR_IDX],width:260,height:260,colorDark:"#000",colorLight:"#fff",correctLevel:QRCode.CorrectLevel.M});
-      $("qr_info").textContent = `${QR_IDX+1} / ${QR_FRAMES.length}`;
-      $("qr_nav").classList.remove("hidden");
-    }
+    new QRCode(div,{text:QR_FRAMES[QR_IDX],width:260,height:260,colorDark:"#000",colorLight:"#fff",correctLevel:QRCode.CorrectLevel.M});
+    $("qr_info").textContent = `${QR_IDX+1} / ${QR_FRAMES.length}`;
+    $("qr_nav").classList.remove("hidden");
   }
-  $("qr_prev").onclick=()=>{ if(QR_FRAMES.length>1){ QR_IDX=(QR_IDX-1+QR_FRAMES.length)%QR_FRAMES.length; renderQRFrame(); } };
-  $("qr_next").onclick=()=>{ if(QR_FRAMES.length>1){ QR_IDX=(QR_IDX+1)%QR_FRAMES.length; renderQRFrame(); } };
-  $("qr_play").onclick=()=>{ if(QR_FRAMES.length>1 && !QR_TIMER){ QR_TIMER=setInterval(()=>{ $("qr_next").click(); }, 700); $("qr_play").classList.add("hidden"); $("qr_pause").classList.remove("hidden"); } };
+  $("qr_prev").onclick=()=>{ if(QR_FRAMES.length){ QR_IDX=(QR_IDX-1+QR_FRAMES.length)%QR_FRAMES.length; renderQRFrame(); } };
+  $("qr_next").onclick=()=>{ if(QR_FRAMES.length){ QR_IDX=(QR_IDX+1)%QR_FRAMES.length; renderQRFrame(); } };
   $("qr_pause").onclick=()=>{ stopQRPlay(); $("qr_pause").classList.add("hidden"); $("qr_play").classList.remove("hidden"); };
+  $("qr_play").onclick =()=>{ if(QR_FRAMES.length && !QR_TIMER){ QR_TIMER=setInterval(()=>{ $("qr_next").click(); }, 700);
+                               $("qr_play").classList.add("hidden"); $("qr_pause").classList.remove("hidden"); } };
 
   $("btn_make_submit").onclick=async ()=>{
     try{
@@ -525,34 +514,38 @@
             maxPriorityFeePerGas_gwei:Number(gGasChoice.priority_gwei?.toFixed?.(2)??gGasChoice.priority_gwei) }
         : { maxFeePerGas_gwei:"根据网络估算", maxPriorityFeePerGas_gwei:"根据网络估算" };
 
+      // 始终输出“标准键名”的 tx_human.json
       const h={
-        kind:"ETH", from:"提交者 EOA（由离线端推导）",
-        to:gSafe.target, value_wei:0, amount_eth:"0", data_hex:$("calldata").value,
-        chainId:gChainId, nonce:"提交者EOA当前nonce（下方工具可查）", gas:"建议估算填写",
+        kind:"ETH",
+        from:"提交者 EOA（由离线端推导）",
+        to:gSafe.target,
+        value_wei:0,
+        amount_eth:"0",
+        data_hex:$("calldata").value,
+        chainId:gChainId,
+        nonce:"提交者EOA当前nonce（下方工具可查）",
+        gas:"建议估算填写",
         ...gasFields
       };
-      const compact = $("compact_keys").checked;
-      const text = minifyTxHuman(h, compact);
+      const text = JSON.stringify(h);     // 不使用紧凑键名
       gSubmitJSONText = JSON.stringify(h,null,2);
 
       const fullHash = await sha256Hex(text);
       const sessionId = fullHash.slice(0,16);
 
-      const SINGLE_LIMIT = 1200;
-      stopQRPlay();
-      if(text.length <= SINGLE_LIMIT){
-        QR_FRAMES=[text]; QR_IDX=0; renderQRFrame();
-        $("submit_status").textContent = `单帧二维码（长度 ${text.length}）`;
-        $("qr_play").classList.remove("hidden"); $("qr_pause").classList.add("hidden");
-        return;
-      }
+      // 统一采用 SAFEQR 容器（即使只有 1 帧也包一层），并“自动轮播”
       const CHUNK = 900;
-      const parts = splitFrames(text, CHUNK);
+      const parts = (text.length<=CHUNK) ? [text] : splitFrames(text, CHUNK);
       const n = parts.length;
       QR_FRAMES = parts.map((data,i)=> JSON.stringify({ t:"SAFEQR", v:1, id:sessionId, i, n, sum:fullHash.slice(0,16), data }));
       QR_IDX=0; renderQRFrame();
-      $("submit_status").textContent = `多帧二维码：${n} 帧（总长度 ${text.length}）`;
-      $("qr_play").classList.remove("hidden"); $("qr_pause").classList.add("hidden");
+
+      // 自动播放（动态二维码）
+      stopQRPlay();
+      QR_TIMER=setInterval(()=>{ $("qr_next").click(); }, 700);
+      $("qr_pause").classList.remove("hidden"); $("qr_play").classList.add("hidden");
+
+      $("submit_status").textContent = `已生成 ${n} 帧 SAFEQR（动态播放中）`;
     }catch(e){ $("submit_status").textContent="错误："+e.message; }
   };
 
