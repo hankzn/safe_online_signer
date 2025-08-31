@@ -37,8 +37,8 @@
   Array.from(document.getElementsByName("kind")).forEach(r=> r.addEventListener("change", switchKind));
   switchKind();
 
-  // 摄像头扫码（签名）
-  let scanStream=null, rafId=null;
+  // 摄像头扫码（签名/RawTx 共用）
+  let scanStream=null, rafId=null, scanning=false;
   async function openCamera(videoEl){
     const constraints={ audio:false, video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}, aspectRatio:{ideal:16/9} } };
     const stream=await navigator.mediaDevices.getUserMedia(constraints);
@@ -51,9 +51,11 @@
     return {sx,sy,s,dx:0,dy:0,w:size,h:size};
   }
   function stopScan(){
+    scanning=false;
     if(rafId) { cancelAnimationFrame(rafId); rafId=null; }
     if(scanStream){ scanStream.getTracks().forEach(t=>t.stop()); scanStream=null; }
-    $("video").srcObject=null; $("cam_box").style.display="none";
+    const v=$("video"); if(v) v.srcObject=null;
+    const cam=$("cam_box"); if(cam) cam.style.display="none";
   }
 
   // Safe 基本信息
@@ -190,9 +192,11 @@ nonce=${gNonce}`;
     try{
       const video=$("video"), canvas=$("canvas");
       scanStream=await openCamera(video);
+      scanning=true;
       $("scan_status").textContent="请将二维码置于白色框内";
       const ctx=canvas.getContext("2d");
       const tick=()=>{
+        if(!scanning) return;
         if(!video.videoWidth){ rafId=requestAnimationFrame(tick); return; }
         const {sx,sy,s,dx,dy,w,h}=prepSquareFrame(video,canvas);
         ctx.drawImage(video, sx,sy,s,s, dx,dy,w,h);
@@ -211,40 +215,49 @@ nonce=${gNonce}`;
   };
   $("stop_scan").onclick=stopScan;
 
-  // ★★★ 新增：扫码 RawTx 并自动填入（复用同一正方形扫描框） ★★★
-  $("btn_scan_rawtx").onclick = async ()=>{
-    // 若之前正在扫码，先停止，避免并发
-    try { stopScan(); } catch(_) {}
-    $("cam_box").style.display="";
-    $("scan_status").textContent="启动摄像头…";
-    try{
+  // ★ 新增：扫码 RawTx（用 addEventListener，避免 onclick 被覆盖）
+  (function bindScanRawTx(){
+    const btn = $("btn_scan_rawtx");
+    if(!btn) return; // 如果页面上没有该按钮，直接退出
+    const handler = async ()=>{
+      try { stopScan(); } catch(_) {}
+      const cam = $("cam_box");
+      const status = $("scan_status");
       const video=$("video"), canvas=$("canvas");
-      scanStream=await openCamera(video);
-      $("scan_status").textContent="请将二维码置于白色框内（RawTx）";
-      const ctx=canvas.getContext("2d");
-      const tick=()=>{
-        if(!video.videoWidth){ rafId=requestAnimationFrame(tick); return; }
-        const {sx,sy,s,dx,dy,w,h}=prepSquareFrame(video,canvas);
-        ctx.drawImage(video, sx,sy,s,s, dx,dy,w,h);
-        const img=ctx.getImageData(0,0,w,h);
-        const code=jsQR(img.data,w,h,{inversionAttempts:"attemptBoth"});
-        if(code && code.data){
-          const t=(code.data||"").trim();
-          // RawTx 常为 0x + RLP 编码十六进制串，长度通常 > 100
-          if(/^0x[0-9a-fA-F]+$/.test(t) && t.length>100){
-            $("rawtx").value = t;
-            $("bc_status").textContent = "已填入 RawTx（扫码）";
-            stopScan();
-            return;
+      if(!cam || !status || !video || !canvas){ return; }
+
+      cam.style.display = "";
+      status.textContent = "启动摄像头…";
+      try{
+        scanStream = await openCamera(video);
+        scanning = true;
+        status.textContent = "请将二维码置于白色框内（RawTx）";
+        const ctx = canvas.getContext("2d");
+        const tick = ()=>{
+          if(!scanning) return;
+          if(!video.videoWidth){ rafId=requestAnimationFrame(tick); return; }
+          const {sx,sy,s,dx,dy,w,h}=prepSquareFrame(video,canvas);
+          ctx.drawImage(video, sx,sy,s,s, dx,dy,w,h);
+          const img=ctx.getImageData(0,0,w,h);
+          const code=jsQR(img.data,w,h,{inversionAttempts:"attemptBoth"});
+          if(code && code.data){
+            const t=(code.data||"").trim();
+            if(/^0x[0-9a-fA-F]+$/.test(t) && t.length>100){
+              $("rawtx").value = t;
+              $("bc_status").textContent = "已填入 RawTx（扫码）";
+              stopScan();
+              return;
+            }
           }
-        }
-        rafId=requestAnimationFrame(tick);
-      };
-      tick();
-    }catch(e){
-      $("scan_status").textContent="摄像头失败："+(e && e.message ? e.message : e);
-    }
-  };
+          rafId=requestAnimationFrame(tick);
+        };
+        tick();
+      }catch(e){
+        status.textContent = "摄像头失败：" + (e && e.message ? e.message : e);
+      }
+    };
+    btn.addEventListener("click", handler);
+  })();
 
   $("btn_add_sig").onclick=()=> addSigHex(($("sig_hex").value||"").trim());
 
