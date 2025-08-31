@@ -1,12 +1,14 @@
-
 <!doctype html>
 <html lang="zh">
 <head>
 <meta charset="utf-8"/>
-<title>Safe 在线聚合器（构造 / 验签 / 聚合 / 提交）</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Safe 在线聚合器（构造 / 验签 / 聚合 / 提交）· ethers v6</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 <style>
-  :root{--fg:#111827;--muted:#6b7280;--br:#e5e7eb;--ok:#16a34a;--bad:#dc2626}
+  :root{
+    --fg:#111827; --muted:#6b7280; --br:#e5e7eb; --ok:#16a34a; --bad:#dc2626;
+    --accent:#111; --scan-size: min(85vmin, 720px);
+  }
   body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:24px;max-width:1080px;color:var(--fg)}
   h1{font-size:22px;margin:0 0 12px}
   .card{border:1px solid var(--br);border-radius:12px;padding:16px;margin:16px 0}
@@ -17,22 +19,36 @@
   input,textarea,button{font-size:14px}
   input[type=text],input[type=number],textarea{width:100%;padding:10px;border:1px solid var(--br);border-radius:10px;font-family:monospace}
   textarea{min-height:120px}
-  button{padding:10px 14px;border-radius:10px;border:1px solid #111;background:#111;color:#fff;cursor:pointer}
-  button.ghost{background:#fff;color:#111}
+  button{padding:10px 14px;border-radius:10px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+  button.ghost{background:#fff;color:var(--accent)}
   .muted{color:var(--muted)}
   .mono{font-family:monospace}
   .ok{color:var(--ok);font-weight:700}
   .bad{color:var(--bad);font-weight:700}
-  video{width:100%;max-height:260px;background:#000;border-radius:10px}
-  canvas{display:none}
   .hidden{display:none}
   table{width:100%;border-collapse:collapse}
   th,td{padding:8px;border-bottom:1px solid var(--br);text-align:left}
+  .num{white-space:nowrap}
+  .pill{display:inline-block;padding:2px 8px;border-radius:9999px;background:#eef2ff;color:#4338ca;font-size:12px}
+
+  /* 统一摄像头容器（适配电脑 / iPad） */
+  .cam-wrap{position:relative;border:1px solid var(--br);border-radius:12px;overflow:hidden;background:#000;margin-top:10px}
+  .cam-wrap .preview{position:relative;width:100%;height:80vh;max-height:92vh;min-height:320px}
+  .cam-wrap video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .cam-wrap canvas{display:none}
+  .scan-overlay{pointer-events:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+  .scan-overlay::before{
+    content:""; display:block; width:var(--scan-size); aspect-ratio:1/1;
+    border:2px solid rgba(255,255,255,.95); border-radius:16px;
+    box-shadow:0 0 0 9999px rgba(0,0,0,.35);
+  }
+  .hint{position:absolute;bottom:10px;left:0;right:0;text-align:center;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.6);font-size:14px}
 </style>
 </head>
 <body>
 <h1>Safe 在线聚合器（构造 / 验签 / 聚合 / 提交）</h1>
 
+<!-- 全局 / 网络 -->
 <div class="card">
   <h2>全局 / 网络</h2>
   <div class="grid">
@@ -47,6 +63,7 @@
   <pre id="safe_info" class="mono muted"></pre>
 </div>
 
+<!-- 构造调用 & safeTxGas -->
 <div class="card">
   <h2>构造调用 & 估算 safeTxGas</h2>
   <div class="row">
@@ -91,18 +108,41 @@
   <div class="row"><div><div class="muted">EIP-712 JSON 二维码</div><div id="qr_typed" style="margin-top:6px"></div></div></div>
 </div>
 
+<!-- Gas 估算：低/中/高 -->
+<div class="card">
+  <h2>EIP-1559 Gas 估算（低/中/高）</h2>
+  <div class="row">
+    <button id="btn_gas_est" class="ghost">估算当前 Gas 档位</button>
+    <span id="gas_status" class="muted"></span>
+    <span id="gas_applied" class="pill hidden">已应用：<span id="gas_choice"></span></span>
+  </div>
+  <div id="gas_table_box" style="margin-top:10px"></div>
+</div>
+
+<!-- 收集 / 验签 / 聚合 -->
 <div class="card">
   <h2>收集 / 验签 / 聚合</h2>
   <div class="row">
-    <button id="btn_scan_sig" class="ghost">扫码签名</button>
+    <button id="btn_scan_sig" class="ghost">摄像头扫码签名</button>
     <input id="sig_hex" type="text" placeholder="0x...签名hex（65字节）" style="flex:1"/>
     <button id="btn_add_sig">添加签名</button>
     <span id="sig_status" class="muted"></span>
   </div>
-  <div id="cam_box" class="card" style="display:none">
-    <div class="row"><button id="stop_scan" class="ghost">停止扫码</button><span id="scan_status" class="muted"></span></div>
-    <video id="video" playsinline muted></video><canvas id="canvas"></canvas>
+
+  <!-- 统一大的预览/扫描区（签名） -->
+  <div id="cam_sig" class="cam-wrap" style="display:none">
+    <div class="preview">
+      <video id="video_sig" playsinline webkit-playsinline muted></video>
+      <canvas id="canvas_sig"></canvas>
+      <div class="scan-overlay"></div>
+      <div class="hint">请将“签名”二维码置于白色框内</div>
+    </div>
+    <div class="row" style="padding:10px">
+      <button id="btn_stop_sig" class="ghost">停止扫码</button>
+      <span id="status_sig" class="muted"></span>
+    </div>
   </div>
+
   <div id="sigs_table_box" style="margin-top:12px"></div>
 
   <div class="row">
@@ -112,6 +152,7 @@
   <label>calldata<textarea id="calldata" readonly></textarea></label>
 </div>
 
+<!-- 提交者 tx_human.json & 广播 -->
 <div class="card">
   <h2>提交者 tx_human.json & 广播</h2>
   <div class="row">
@@ -128,6 +169,7 @@
   <div id="bc_table_box" style="margin-top:12px"></div>
 </div>
 
+<!-- 工具 -->
 <div class="card">
   <h2>工具：查询地址 Nonce / 打开区块链浏览器</h2>
   <div class="row" style="gap:8px">
@@ -172,17 +214,19 @@
   function switchKind(){ const k=byName("kind").value; $("eth_box").classList.toggle("hidden",k!=="ETH"); $("erc_box").classList.toggle("hidden",k!=="ERC20"); }
   Array.from(document.getElementsByName("kind")).forEach(r=> r.addEventListener("change",switchKind)); switchKind();
 
-  let gChainId=null, gSafe=null, gOwners=[], gThreshold=0, gNonce=0;
+  let gChainId=null, gProvider=null, gSafe=null, gOwners=[], gThreshold=0, gNonce=0;
   let gDomain=null, gTypes=null, gMessage=null, gHash=null, gSigs=[];
+  let gGasChoice=null;
 
+  // 读取 Safe
   $("btn_load").onclick=async ()=>{
     try{
       const [u1]=requireRPCs();
       const addr=$("safe_addr").value.trim();
       if(!/^0x[0-9a-fA-F]{40}$/.test(addr)) throw new Error("Safe 地址不合法");
       gChainId=parseInt(await rpc(u1,"eth_chainId",[]),16);
-      const provider=new ethers.JsonRpcProvider(u1,{ staticNetwork:gChainId });
-      gSafe=new ethers.Contract(addr, SAFE_ABI, provider);
+      gProvider=new ethers.JsonRpcProvider(u1, gChainId);
+      gSafe=new ethers.Contract(addr, SAFE_ABI, gProvider);
       gOwners=await gSafe.getOwners();
       gThreshold=Number(await gSafe.getThreshold());
       gNonce=Number(await gSafe.nonce());
@@ -191,15 +235,17 @@
       $("safe_info").textContent=`chainId=${gChainId}\nowners=${JSON.stringify(gOwners,null,2)}\nthreshold=${gThreshold}\nnonce=${gNonce}`;
     }catch(e){ $("net_status").textContent="错误："+e.message; $("safe_info").textContent=""; }
   };
+
   $("btn_refresh_nonce").onclick=async ()=>{
-    try{ if(!gSafe) throw new Error("请先读取 Safe 信息"); gNonce=Number(await gSafe.nonce()); $("nonce").value=gNonce; $("build_status").textContent="已刷新 nonce="+gNonce; }
-    catch(e){ $("build_status").textContent="错误："+e.message; }
+    try{ if(!gSafe) throw new Error("请先读取 Safe 信息");
+      gNonce=Number(await gSafe.nonce()); $("nonce").value=gNonce; $("build_status").textContent="已刷新 nonce="+gNonce;
+    }catch(e){ $("build_status").textContent="错误："+e.message; }
   };
 
+  // 构造调用 & safeTxGas
   function decimalToSmallestStr(amountStr,decimals){
     if(!/^\d+(\.\d+)?$/.test(amountStr)) throw new Error("金额格式应为非负小数");
-    const [i,f=""]=amountStr.split(".");
-    if(f.length>decimals) throw new Error("小数位超过 decimals");
+    const [i,f=""]=amountStr.split("."); if(f.length>decimals) throw new Error("小数位超过 decimals");
     const s=(i+f.padEnd(decimals,"0")).replace(/^0+/,"")||"0"; BigInt(s); return s;
   }
   function buildCall(){
@@ -219,7 +265,6 @@
       return { to:token, value:0n, data };
     }
   }
-
   $("btn_estimate").onclick=async ()=>{
     try{
       if(!gSafe) throw new Error("请先读取 Safe 信息");
@@ -231,6 +276,7 @@
     }catch(e){ $("build_status").textContent="错误："+e.message; }
   };
 
+  // 生成 EIP-712
   $("btn_build_712").onclick=()=>{
     try{
       if(!gSafe) throw new Error("请先读取 Safe 信息");
@@ -245,16 +291,9 @@
 
       gDomain={ verifyingContract:gSafe.target, chainId:gChainId };
       gTypes={ SafeTx:[
-        {name:"to",type:"address"},
-        {name:"value",type:"uint256"},
-        {name:"data",type:"bytes"},
-        {name:"operation",type:"uint8"},
-        {name:"safeTxGas",type:"uint256"},
-        {name:"baseGas",type:"uint256"},
-        {name:"gasPrice",type:"uint256"},
-        {name:"gasToken",type:"address"},
-        {name:"refundReceiver",type:"address"},
-        {name:"nonce",type:"uint256"},
+        {name:"to",type:"address"},{name:"value",type:"uint256"},{name:"data",type:"bytes"},{name:"operation",type:"uint8"},
+        {name:"safeTxGas",type:"uint256"},{name:"baseGas",type:"uint256"},{name:"gasPrice",type:"uint256"},
+        {name:"gasToken",type:"address"},{name:"refundReceiver",type:"address"},{name:"nonce",type:"uint256"}
       ]};
       gMessage={ to:call.to, value:call.value.toString(), data:call.data, operation:op, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce };
       const typed={ domain:gDomain, types:gTypes, message:gMessage, primaryType:"SafeTx" };
@@ -267,55 +306,62 @@
     }catch(e){ $("build_status").textContent="错误："+e.message; }
   };
 
-  // 收集签名
-  let stream=null, rafId=null;
-  $("btn_scan_sig").onclick=async ()=>{
-    $("cam_box").style.display=""; $("scan_status").textContent="启动摄像头…";
+  // Gas 档位（与之前版本一致）
+  function toGwei(n){ return Number(ethers.formatUnits(n, "gwei")); }
+  async function getGasTiers(){
+    const BLOCKS=30, PCTS=[25,50,90];
     try{
-      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
-      $("video").srcObject=stream; await $("video").play();
-      $("scan_status").textContent="请对准签名二维码";
-      tick();
-    }catch(e){ $("scan_status").textContent="摄像头失败："+e.message; }
-  };
-  $("stop_scan").onclick=stopScan;
-  function stopScan(){ if(rafId)cancelAnimationFrame(rafId); rafId=null; if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
-    $("video").srcObject=null; $("cam_box").style.display="none"; }
-  function tick(){
-    const v=$("video"); if(!v.videoWidth){ rafId=requestAnimationFrame(tick); return; }
-    const c=$("canvas"),ctx=c.getContext("2d"); c.width=v.videoWidth; c.height=v.videoHeight;
-    ctx.drawImage(v,0,0,c.width,c.height);
-    const img=ctx.getImageData(0,0,c.width,c.height);
-    const code=jsQR(img.data,c.width,c.height,{inversionAttempts:"attemptBoth"});
-    if(code && code.data){
-      const t=code.data.trim();
-      if(/^0x[0-9a-fA-F]+$/.test(t) && t.length>130){ stopScan(); addSigHex(t); return; }
+      const hist = await gProvider.send("eth_feeHistory", [ "0x"+BLOCKS.toString(16), "latest", PCTS ]);
+      const baseFeeWei = BigInt(hist.baseFeePerGas[hist.baseFeePerGas.length-1]);
+      const median = arr => { const a=[...arr].map(BigInt).sort((x,y)=> (x>y?1:-1)); const m=Math.floor(a.length/2); return (a.length%2)? a[m] : ((a[m-1]+a[m])>>1n); };
+      const tipsP25 = median(hist.reward.map(r=> r[0]));
+      const tipsP50 = median(hist.reward.map(r=> r[1]));
+      const tipsP90 = median(hist.reward.map(r=> r[2]));
+      const base = toGwei(baseFeeWei), pri25=toGwei(tipsP25), pri50=toGwei(tipsP50), pri90=toGwei(tipsP90);
+      return {
+        low :{tier:"低", baseFee_gwei:base, priority_gwei:pri25, maxFee_gwei: base*1.10 + pri25},
+        mid :{tier:"中", baseFee_gwei:base, priority_gwei:pri50, maxFee_gwei: base*1.25 + pri50},
+        high:{tier:"高", baseFee_gwei:base, priority_gwei:pri90, maxFee_gwei: base*1.50 + pri90}
+      };
+    }catch(e){
+      const [block, tipHex] = await Promise.all([ gProvider.getBlock("latest"), gProvider.send("eth_maxPriorityFeePerGas", []) ]);
+      const base = toGwei(block.baseFeePerGas); const tip = Number(ethers.formatUnits(tipHex,"gwei"));
+      return {
+        low :{tier:"低", baseFee_gwei:base, priority_gwei:Math.max(0.5, tip*0.5), maxFee_gwei: base*1.10 + Math.max(0.5, tip*0.5)},
+        mid :{tier:"中", baseFee_gwei:base, priority_gwei:tip, maxFee_gwei: base*1.25 + tip},
+        high:{tier:"高", baseFee_gwei:base, priority_gwei:tip*1.5, maxFee_gwei: base*1.50 + tip*1.5}
+      };
     }
-    rafId=requestAnimationFrame(tick);
   }
-  $("btn_add_sig").onclick=()=> addSigHex($("sig_hex").value);
-  async function addSigHex(sigHex){
+  $("btn_gas_est").onclick = async ()=>{
     try{
-      if(!gHash||!gDomain) throw new Error("请先生成 EIP-712 JSON");
-      const sig=(sigHex||"").trim();
-      if(!/^0x[0-9a-fA-F]+$/.test(sig) || sig.length<130) throw new Error("签名格式不正确");
-      const signer=ethers.getAddress(ethers.verifyTypedData(gDomain,gTypes,gMessage,sig));
-      gSigs.push({signer, sig});
-      // 去重 + 排重
-      const map=new Map(); gSigs.forEach(x=> map.set(x.signer,x)); gSigs=Array.from(map.values());
-      $("sig_status").textContent = (gOwners.length && !gOwners.map(a=>a.toLowerCase()).includes(signer.toLowerCase()))
-        ? "警告：签名人不在 owners 列表" : (gSigs.length>=gThreshold ? "已达阈值" : "已添加");
-      renderSigs();
-    }catch(e){ $("sig_status").textContent="错误："+e.message; }
-  }
+      if(!gProvider) throw new Error("请先读取 Safe 信息");
+      const tiers = await getGasTiers();
+      const rows = [tiers.low, tiers.mid, tiers.high].map(t=>{
+        const bf=t.baseFee_gwei.toFixed(2), pr=t.priority_gwei.toFixed(2), mf=t.maxFee_gwei.toFixed(2);
+        return `<tr><td>${t.tier}</td><td class="num">${bf}</td><td class="num">${pr}</td><td class="num">${mf}</td>
+        <td><button data-tier="${t.tier}" data-bf="${bf}" data-pr="${pr}" data-mf="${mf}" class="ghost btn_apply">应用</button></td></tr>`;
+      }).join("");
+      $("gas_table_box").innerHTML=`<table><tr><th>档位</th><th>Base Fee(gwei)</th><th>Priority(gwei)</th><th>Max Fee(gwei)</th><th>操作</th></tr>${rows}</table>`;
+      $("gas_status").textContent = "已生成档位";
+      Array.from(document.getElementsByClassName("btn_apply")).forEach(btn=>{
+        btn.onclick=()=>{ const tier=btn.getAttribute("data-tier"); const bf=+btn.getAttribute("data-bf");
+          const pr=+btn.getAttribute("data-pr"); const mf=+btn.getAttribute("data-mf");
+          gGasChoice={tier, baseFee_gwei:bf, priority_gwei:pr, maxFee_gwei:mf};
+          $("gas_choice").textContent=`${tier}（max≈${mf} / prio≈${pr} gwei）`; $("gas_applied").classList.remove("hidden");
+        };
+      });
+    }catch(e){ $("gas_status").textContent="错误："+e.message; $("gas_table_box").innerHTML=""; $("gas_applied").classList.add("hidden"); }
+  };
+
+  // 收集 / 验签 / 聚合
   function renderSigs(){
     const rows=gSigs.map((s,i)=>`<tr><td>${i+1}</td><td class="mono">${s.signer}</td><td class="mono">${s.sig.slice(0,18)}…</td></tr>`).join("");
     $("sigs_table_box").innerHTML = `<div class="muted">已收集 ${gSigs.length} / 阈值 ${gThreshold}</div>
       <table><tr><th>#</th><th>signer</th><th>sig</th></tr>${rows}</table>`;
   }
-
   function packSignatures(list){
-    const sorted=list.slice().sort((a,b)=> a.signer.toLowerCase() < b.signer.toLowerCase() ? -1 : 1);
+    const sorted=list.slice().sort((a,b)=> a.signer.toLowerCase()<b.signer.toLowerCase()? -1:1);
     let packed="0x";
     for(const s of sorted){
       const sig=ethers.Signature.from(s.sig);
@@ -326,7 +372,6 @@
     }
     return packed;
   }
-
   $("btn_assemble").onclick=()=>{
     try{
       if(!gSafe||!gMessage) throw new Error("缺少 Safe 或 EIP-712 消息");
@@ -342,14 +387,92 @@
     }catch(e){ $("asm_status").textContent="错误："+e.message; }
   };
 
+  // 统一摄像头工具（适配电脑 / iPad）
+  async function openCamera(videoEl){
+    const constraints={ audio:false, video:{ facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}, aspectRatio:{ideal:16/9} } };
+    const stream=await navigator.mediaDevices.getUserMedia(constraints);
+    videoEl.srcObject=stream; await videoEl.play(); return stream;
+  }
+  function prepSquareFrame(videoEl, canvasEl){
+    const vw=videoEl.videoWidth||1280, vh=videoEl.videoHeight||720;
+    const s=Math.min(vw,vh), sx=(vw-s)/2, sy=(vh-s)/2; const size=800;
+    canvasEl.width=size; canvasEl.height=size; return {sx,sy,s,dx:0,dy:0,w:size,h:size};
+  }
+  function startScanner({boxId, videoId, canvasId, statusId, onText}){
+    const box=$(boxId), video=$(videoId), canvas=$(canvasId), status=$(statusId);
+    let stream=null, raf=null, running=false;
+    async function begin(){
+      box.style.display=""; status.textContent="启动摄像头…";
+      try{
+        stream=await openCamera(video);
+        status.textContent="请将二维码置于白色框内"; running=true; tick();
+        window.addEventListener("orientationchange",onRotate); window.addEventListener("resize",onRotate);
+      }catch(e){ status.textContent="摄像头失败："+e.message; }
+    }
+    function stop(){
+      running=false; if(raf)cancelAnimationFrame(raf),raf=null;
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+      video.srcObject=null; box.style.display="none";
+      window.removeEventListener("orientationchange",onRotate); window.removeEventListener("resize",onRotate);
+    }
+    function onRotate(){ /* 触发重绘即可 */ }
+    function tick(){
+      if(!running){ return; }
+      if(!video.videoWidth){ raf=requestAnimationFrame(tick); return; }
+      const ctx=canvas.getContext("2d");
+      const {sx,sy,s,dx,dy,w,h}=prepSquareFrame(video,canvas);
+      ctx.drawImage(video,sx,sy,s,s,dx,dy,w,h);
+      const img=ctx.getImageData(0,0,w,h);
+      const code=jsQR(img.data,w,h,{inversionAttempts:"attemptBoth"});
+      if(code && code.data){
+        const ok=onText(code.data.trim());
+        if(ok){ stop(); return; }
+      }
+      raf=requestAnimationFrame(tick);
+    }
+    return { begin, stop };
+  }
+
+  // 扫码签名（采用统一大扫描框）
+  const sigScanner = startScanner({
+    boxId:"cam_sig", videoId:"video_sig", canvasId:"canvas_sig", statusId:"status_sig",
+    onText:(txt)=>{
+      if(/^0x[0-9a-fA-F]+$/.test(txt) && txt.length>130){
+        addSigHex(txt); return true;
+      }
+      return false;
+    }
+  });
+  $("btn_scan_sig").onclick = ()=> sigScanner.begin();
+  $("btn_stop_sig").onclick = ()=> sigScanner.stop();
+
+  // 添加签名 & 验签
+  $("btn_add_sig").onclick=()=> addSigHex($("sig_hex").value);
+  async function addSigHex(sigHex){
+    try{
+      if(!gHash||!gDomain) throw new Error("请先生成 EIP-712 JSON");
+      const sig=(sigHex||"").trim();
+      if(!/^0x[0-9a-fA-F]+$/.test(sig) || sig.length<130) throw new Error("签名格式不正确");
+      const signer=ethers.getAddress(ethers.verifyTypedData(gDomain,gTypes,gMessage,sig));
+      gSigs.push({signer, sig});
+      const map=new Map(); gSigs.forEach(x=> map.set(x.signer,x)); gSigs=Array.from(map.values());
+      $("sig_status").textContent = (gOwners.length && !gOwners.map(a=>a.toLowerCase()).includes(signer.toLowerCase()))
+        ? "警告：签名人不在 owners 列表" : (gSigs.length>=gThreshold ? "已达阈值" : "已添加");
+      renderSigs();
+    }catch(e){ $("sig_status").textContent="错误："+e.message; }
+  }
+
+  // 生成提交者 tx_human.json（沿用已有逻辑：若已应用 Gas 档位则写入数值）
   $("btn_make_submit").onclick=async ()=>{
     try{
       if(!$("calldata").value) throw new Error("请先聚合并编码 calldata");
+      const gasFields = gGasChoice
+        ? { maxFeePerGas_gwei:+gGasChoice.maxFee_gwei.toFixed(2), maxPriorityFeePerGas_gwei:+gGasChoice.priority_gwei.toFixed(2) }
+        : { maxFeePerGas_gwei:"参考上方 Gas 估算", maxPriorityFeePerGas_gwei:"参考上方 Gas 估算" };
       const h={
         kind:"ETH", from:"提交者 EOA（由离线端推导）",
         to:gSafe.target, value_wei:0, amount_eth:"0", data_hex:$("calldata").value,
-        chainId:gChainId, nonce:"提交者EOA当前nonce（下方工具可查）", gas:"建议估算填写",
-        maxFeePerGas_gwei:"参考你的 Gas 估算", maxPriorityFeePerGas_gwei:"参考你的 Gas 估算"
+        chainId:gChainId, nonce:"提交者EOA当前nonce（下方工具可查）", gas:"建议估算填写", ...gasFields
       };
       const txt=JSON.stringify(h,null,2);
       const div=$("qr_submit"); div.innerHTML="";
