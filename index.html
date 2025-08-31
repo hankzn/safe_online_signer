@@ -96,13 +96,12 @@
   <div class="row"><div><div class="muted">EIP-712 JSON 二维码</div><div id="qr_typed" style="margin-top:6px"></div></div></div>
 </div>
 
-<!-- Gas 档位（沿用你上一版，有就保留；否则可删） -->
+<!-- EIP-1559 Gas 估算（低/中/高）— 已恢复“应用”按钮 -->
 <div class="card">
-  <h2>EIP-1559 Gas 估算（低/中/高）</h2>
+  <h2>EIP-1559 Gas 估算（低/中/高） <span id="gas_applied" class="pill hidden">已应用：<span id="gas_choice"></span></span></h2>
   <div class="row">
     <button id="btn_gas_est" class="ghost">估算当前 Gas 档位</button>
     <span id="gas_status" class="muted"></span>
-    <span id="gas_applied" class="pill hidden">已应用：<span id="gas_choice"></span></span>
   </div>
   <div id="gas_table_box" style="margin-top:10px"></div>
 </div>
@@ -140,7 +139,6 @@
     <span id="submit_status" class="muted"></span>
   </div>
 
-  <!-- 单帧/多帧通用 UI -->
   <div class="qrdeck">
     <div id="qr_submit" class="frame"></div>
     <div id="qr_nav" class="controls hidden">
@@ -207,8 +205,8 @@
 
   let gChainId=null, gProvider=null, gSafe=null, gOwners=[], gThreshold=0, gNonce=0;
   let gDomain=null, gTypes=null, gMessage=null, gHash=null, gSigs=[];
-  let gGasChoice=null;
-  let gSubmitJSONText=""; // 生成后的 JSON 文本
+  let gGasChoice=null;          // 恢复：保存“已应用”的档位
+  let gSubmitJSONText="";
 
   // ===== Safe 基本信息 =====
   $("btn_load").onclick=async ()=>{
@@ -309,7 +307,7 @@
     }catch(e){ $("build_status").textContent="错误："+e.message; }
   };
 
-  // ===== 签名收集 / 聚合（保持不变）=====
+  // ===== 签名收集 / 聚合（不变）=====
   let stream=null, rafId=null;
   $("btn_scan_sig").onclick=async ()=>{
     $("cam_box").style.display=""; $("scan_status").textContent="启动摄像头…";
@@ -381,7 +379,7 @@
     }catch(e){ $("asm_status").textContent="错误："+e.message; }
   };
 
-  // ===== Gas 档位（如你上一版）=====
+  // ===== Gas 档位（恢复“应用”按钮）=====
   function toGwei(n){ return Number(ethers.formatUnits(n, "gwei")); }
   async function getGasTiers(){
     if(!gProvider) throw new Error("请先读取 Safe 信息");
@@ -413,31 +411,53 @@
       const tiers=await getGasTiers();
       const rows=[tiers.low,tiers.mid,tiers.high].map(t=>{
         const bf=t.baseFee_gwei.toFixed(2), pr=t.priority_gwei.toFixed(2), mf=t.maxFee_gwei.toFixed(2);
-        return `<tr><td>${t.tier}</td><td>${bf}</td><td>${pr}</td><td>${mf}</td></tr>`;
+        return `<tr>
+          <td>${t.tier}</td>
+          <td>${bf}</td>
+          <td>${pr}</td>
+          <td>${mf}</td>
+          <td><button class="ghost btn_apply" data-tier="${t.tier}" data-pr="${pr}" data-mf="${mf}">应用</button></td>
+        </tr>`;
       }).join("");
-      $("gas_table_box").innerHTML=`<table><tr><th>档位</th><th>Base(gwei)</th><th>Priority(gwei)</th><th>MaxFee(gwei)</th></tr>${rows}</table>`;
+      $("gas_table_box").innerHTML=`<table>
+        <tr><th>档位</th><th>Base(gwei, 近块)</th><th>Priority(gwei, pct)</th><th>MaxFee(gwei)</th><th>操作</th></tr>
+        ${rows}
+      </table>
+      <div class="muted">说明：MaxFee ≈ Base×(1.10/1.25/1.50) + Priority；“应用”后用于生成提交者 tx_human.json。</div>`;
       $("gas_status").textContent="完成";
-    }catch(e){ $("gas_status").textContent="错误："+e.message; $("gas_table_box").innerHTML=""; }
+
+      // 绑定“应用”
+      Array.from(document.getElementsByClassName("btn_apply")).forEach(btn=>{
+        btn.onclick = ()=>{
+          const tier=btn.getAttribute("data-tier");
+          const pr=Number(btn.getAttribute("data-pr"));
+          const mf=Number(btn.getAttribute("data-mf"));
+          gGasChoice = { tier, priority_gwei:pr, maxFee_gwei:mf };
+          $("gas_choice").textContent = `${tier}（max≈${mf} gwei / tip≈${pr} gwei）`;
+          $("gas_applied").classList.remove("hidden");
+        };
+      });
+    }catch(e){
+      $("gas_status").textContent="错误："+e.message;
+      $("gas_table_box").innerHTML="";
+      $("gas_applied").classList.add("hidden");
+      gGasChoice=null;
+    }
   };
 
-  // ===== 生成提交者 tx_human.json（支持多帧QR）=====
+  // ===== 生成提交者 tx_human.json（多帧QR，沿用上版）=====
   async function sha256Hex(str){
     const bytes = new TextEncoder().encode(str);
     const hash = await crypto.subtle.digest("SHA-256", bytes);
     return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
   }
   function minifyTxHuman(obj, compact){
-    if(!compact) return JSON.stringify(obj); // 标准键名
-    // 紧凑键名（可选）：减少体积
-    // kind->k, from->f, to->t, value_wei->vw, amount_eth->ae, data_hex->d,
-    // chainId->c, nonce->n, gas->g, maxFeePerGas_gwei->mf, maxPriorityFeePerGas_gwei->mp
+    if(!compact) return JSON.stringify(obj);
     const map={kind:"k",from:"f",to:"t",value_wei:"vw",amount_eth:"ae",data_hex:"d",chainId:"c",nonce:"n",gas:"g",maxFeePerGas_gwei:"mf",maxPriorityFeePerGas_gwei:"mp"};
     const o={}; for(const k in obj){ const v=obj[k]; if(v!==undefined) o[map[k]||k]=v; }
     return JSON.stringify(o);
   }
-  function splitFrames(text, maxLen){
-    const frames=[]; for(let i=0;i<text.length;i+=maxLen){ frames.push(text.slice(i,i+maxLen)); } return frames;
-  }
+  function splitFrames(text, maxLen){ const frames=[]; for(let i=0;i<text.length;i+=maxLen){ frames.push(text.slice(i,i+maxLen)); } return frames; }
   let QR_FRAMES=[], QR_IDX=0, QR_TIMER=null;
   function stopQRPlay(){ if(QR_TIMER){ clearInterval(QR_TIMER); QR_TIMER=null; } }
   function renderQRFrame(){
@@ -471,12 +491,12 @@
         ...gasFields
       };
       const compact = $("compact_keys").checked;
-      const text = minifyTxHuman(h, compact);            // 最小化
-      gSubmitJSONText = JSON.stringify(h,null,2);        // 供复制/下载保留原版
-      const fullHash = await sha256Hex(text);
-      const sessionId = fullHash.slice(0,16);            // 8字节ID（16 hex）
+      const text = minifyTxHuman(h, compact);
+      gSubmitJSONText = JSON.stringify(h,null,2);
 
-      // 尝试单帧显示（经验：~1200~1500字节较稳；按 1200）
+      const fullHash = await sha256Hex(text);
+      const sessionId = fullHash.slice(0,16);
+
       const SINGLE_LIMIT = 1200;
       stopQRPlay();
       if(text.length <= SINGLE_LIMIT){
@@ -485,21 +505,17 @@
         $("qr_play").classList.remove("hidden"); $("qr_pause").classList.add("hidden");
         return;
       }
-
-      // 多帧：按 900 字节一帧，打包 SAFEQR 容器
       const CHUNK = 900;
       const parts = splitFrames(text, CHUNK);
       const n = parts.length;
-      QR_FRAMES = parts.map((data,i)=> JSON.stringify({
-        t:"SAFEQR", v:1, id:sessionId, i, n, sum:fullHash.slice(0,16), data
-      }));
+      QR_FRAMES = parts.map((data,i)=> JSON.stringify({ t:"SAFEQR", v:1, id:sessionId, i, n, sum:fullHash.slice(0,16), data }));
       QR_IDX=0; renderQRFrame();
       $("submit_status").textContent = `多帧二维码：${n} 帧（总长度 ${text.length}）`;
       $("qr_play").classList.remove("hidden"); $("qr_pause").classList.add("hidden");
     }catch(e){ $("submit_status").textContent="错误："+e.message; }
   };
 
-  // 复制 / 下载 JSON（原版，便于兜底）
+  // 复制 / 下载 JSON（原版）
   $("btn_copy_json").onclick=async ()=>{
     try{ await navigator.clipboard.writeText(gSubmitJSONText||""); $("submit_status").textContent="已复制 JSON"; }
     catch(e){ $("submit_status").textContent="复制失败："+e.message; }
