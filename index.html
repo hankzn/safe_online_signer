@@ -1,0 +1,409 @@
+
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<title>Safe 在线聚合器（构造 / 验签 / 聚合 / 提交）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+  :root{--fg:#111827;--muted:#6b7280;--br:#e5e7eb;--ok:#16a34a;--bad:#dc2626}
+  body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:24px;max-width:1080px;color:var(--fg)}
+  h1{font-size:22px;margin:0 0 12px}
+  .card{border:1px solid var(--br);border-radius:12px;padding:16px;margin:16px 0}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  label{display:block}
+  input,textarea,button{font-size:14px}
+  input[type=text],input[type=number],textarea{width:100%;padding:10px;border:1px solid var(--br);border-radius:10px;font-family:monospace}
+  textarea{min-height:120px}
+  button{padding:10px 14px;border-radius:10px;border:1px solid #111;background:#111;color:#fff;cursor:pointer}
+  button.ghost{background:#fff;color:#111}
+  .muted{color:var(--muted)}
+  .mono{font-family:monospace}
+  .ok{color:var(--ok);font-weight:700}
+  .bad{color:var(--bad);font-weight:700}
+  video{width:100%;max-height:260px;background:#000;border-radius:10px}
+  canvas{display:none}
+  .hidden{display:none}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:8px;border-bottom:1px solid var(--br);text-align:left}
+</style>
+</head>
+<body>
+<h1>Safe 在线聚合器（构造 / 验签 / 聚合 / 提交）</h1>
+
+<div class="card">
+  <h2>全局 / 网络</h2>
+  <div class="grid">
+    <label>RPC_URL_1 <input id="rpc1" type="text" placeholder="https://mainnet.infura.io/v3/..." /></label>
+    <label>RPC_URL_2 <input id="rpc2" type="text" placeholder="https://eth-mainnet.g.alchemy.com/v2/..." /></label>
+  </div>
+  <div class="row">
+    <label style="flex:1">Safe 地址<input id="safe_addr" type="text" placeholder="0xYourSafe"/></label>
+    <button id="btn_load" class="ghost">读取 Safe 信息</button>
+    <span id="net_status" class="muted"></span>
+  </div>
+  <pre id="safe_info" class="mono muted"></pre>
+</div>
+
+<div class="card">
+  <h2>构造调用 & 估算 safeTxGas</h2>
+  <div class="row">
+    <label class="inline"><input type="radio" name="kind" value="ETH" checked/> ETH</label>
+    <label class="inline"><input type="radio" name="kind" value="ERC20"/> ERC-20</label>
+  </div>
+  <div id="eth_box" class="grid">
+    <label>to<input id="eth_to" type="text" placeholder="0xRecipient"/></label>
+    <label>amount(ETH)<input id="eth_amount" type="text" placeholder="1.0"/></label>
+  </div>
+  <div id="erc_box" class="grid hidden">
+    <label>token<input id="erc_token" type="text" placeholder="0xToken"/></label>
+    <label>to<input id="erc_to" type="text" placeholder="0xRecipient"/></label>
+    <label>amount(human)<input id="erc_amount" type="text" placeholder="1000"/></label>
+    <label>decimals<input id="erc_decimals" type="number" value="18" min="0" max="36"/></label>
+  </div>
+
+  <div class="grid3">
+    <label>operation<input id="op" type="number" value="0" min="0" max="1"/></label>
+    <label>safeTxGas<input id="safeTxGas" type="number" value="0"/></label>
+    <label>baseGas<input id="baseGas" type="number" value="0"/></label>
+    <label>gasPrice<input id="gasPrice" type="number" value="0"/></label>
+    <label>gasToken<input id="gasToken" type="text" value="0x0000000000000000000000000000000000000000"/></label>
+    <label>refundReceiver<input id="refundReceiver" type="text" value="0x0000000000000000000000000000000000000000"/></label>
+  </div>
+
+  <div class="row">
+    <label>Safe Nonce<input id="nonce" type="number" value="0" style="width:160px"/></label>
+    <button id="btn_refresh_nonce" class="ghost">刷新 Nonce</button>
+    <button id="btn_estimate" class="ghost">估算 safeTxGas</button>
+    <span id="build_status" class="muted"></span>
+  </div>
+
+  <div class="row">
+    <button id="btn_build_712">生成 EIP-712 JSON（二维码）</button>
+    <span class="muted">发给各 owner 用离线端签名</span>
+  </div>
+  <div class="grid">
+    <label>EIP-712 JSON<textarea id="typed_json" readonly></textarea></label>
+    <label>safeTxHash<textarea id="typed_hash" readonly></textarea></label>
+  </div>
+  <div class="row"><div><div class="muted">EIP-712 JSON 二维码</div><div id="qr_typed" style="margin-top:6px"></div></div></div>
+</div>
+
+<div class="card">
+  <h2>收集 / 验签 / 聚合</h2>
+  <div class="row">
+    <button id="btn_scan_sig" class="ghost">扫码签名</button>
+    <input id="sig_hex" type="text" placeholder="0x...签名hex（65字节）" style="flex:1"/>
+    <button id="btn_add_sig">添加签名</button>
+    <span id="sig_status" class="muted"></span>
+  </div>
+  <div id="cam_box" class="card" style="display:none">
+    <div class="row"><button id="stop_scan" class="ghost">停止扫码</button><span id="scan_status" class="muted"></span></div>
+    <video id="video" playsinline muted></video><canvas id="canvas"></canvas>
+  </div>
+  <div id="sigs_table_box" style="margin-top:12px"></div>
+
+  <div class="row">
+    <button id="btn_assemble">聚合并编码 execTransaction</button>
+    <span id="asm_status" class="muted"></span>
+  </div>
+  <label>calldata<textarea id="calldata" readonly></textarea></label>
+</div>
+
+<div class="card">
+  <h2>提交者 tx_human.json & 广播</h2>
+  <div class="row">
+    <button id="btn_make_submit" class="ghost">生成提交者 tx_human.json（二维码）</button>
+    <span class="muted">交给你的 EOA 离线签名器</span>
+  </div>
+  <div class="row"><div><div class="muted">tx_human.json 二维码</div><div id="qr_submit" style="margin-top:6px"></div></div></div>
+
+  <label>RawTx<input id="rawtx" type="text" placeholder="0x..."/></label>
+  <div class="row">
+    <button id="btn_broadcast">双 RPC 广播</button>
+    <span id="bc_status" class="muted"></span>
+  </div>
+  <div id="bc_table_box" style="margin-top:12px"></div>
+</div>
+
+<div class="card">
+  <h2>工具：查询地址 Nonce / 打开区块链浏览器</h2>
+  <div class="row" style="gap:8px">
+    <input id="addr" type="text" placeholder="0x 地址" style="flex:1"/>
+    <button id="btn_get_nonce" class="ghost">查询 pending nonce</button>
+    <button id="btn_open_addr" class="ghost">打开浏览器</button>
+    <span id="aux_status" class="muted"></span>
+  </div>
+  <div id="nonce_table_box" style="margin-top:12px"></div>
+</div>
+
+<script src="./libs/ethers.umd.min.js"></script>
+<script src="./libs/qrcode.min.js"></script>
+<script src="./libs/jsQR.js"></script>
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const ZERO="0x0000000000000000000000000000000000000000";
+  const SAFE_ABI=[
+    "function nonce() view returns (uint256)",
+    "function getOwners() view returns (address[])",
+    "function getThreshold() view returns (uint256)",
+    "function execTransaction(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,bytes signatures) returns (bool)"
+  ];
+  const ERC20_ABI=[ "function transfer(address to,uint256 amount) returns (bool)" ];
+  const IF_SAFE=new ethers.Interface(SAFE_ABI);
+  const IF_ERC20=new ethers.Interface(ERC20_ABI);
+
+  function rpc(url,method,params=[]){
+    return fetch(url,{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({jsonrpc:"2.0",id:Date.now(),method,params})}).then(r=>r.json()).then(j=>{
+        if(j.error) throw new Error(j.error.message||JSON.stringify(j.error));
+        return j.result;
+      });
+  }
+  function requireRPCs(){
+    const u1=$("rpc1").value.trim(), u2=$("rpc2").value.trim();
+    if(!u1||!u2) throw new Error("请先填写两条 RPC");
+    return [u1,u2];
+  }
+  const byName=name=>document.querySelector(`[name="${name}"]:checked`);
+  function switchKind(){ const k=byName("kind").value; $("eth_box").classList.toggle("hidden",k!=="ETH"); $("erc_box").classList.toggle("hidden",k!=="ERC20"); }
+  Array.from(document.getElementsByName("kind")).forEach(r=> r.addEventListener("change",switchKind)); switchKind();
+
+  let gChainId=null, gSafe=null, gOwners=[], gThreshold=0, gNonce=0;
+  let gDomain=null, gTypes=null, gMessage=null, gHash=null, gSigs=[];
+
+  $("btn_load").onclick=async ()=>{
+    try{
+      const [u1]=requireRPCs();
+      const addr=$("safe_addr").value.trim();
+      if(!/^0x[0-9a-fA-F]{40}$/.test(addr)) throw new Error("Safe 地址不合法");
+      gChainId=parseInt(await rpc(u1,"eth_chainId",[]),16);
+      const provider=new ethers.JsonRpcProvider(u1,{ staticNetwork:gChainId });
+      gSafe=new ethers.Contract(addr, SAFE_ABI, provider);
+      gOwners=await gSafe.getOwners();
+      gThreshold=Number(await gSafe.getThreshold());
+      gNonce=Number(await gSafe.nonce());
+      $("nonce").value=gNonce;
+      $("net_status").textContent="读取成功";
+      $("safe_info").textContent=`chainId=${gChainId}\nowners=${JSON.stringify(gOwners,null,2)}\nthreshold=${gThreshold}\nnonce=${gNonce}`;
+    }catch(e){ $("net_status").textContent="错误："+e.message; $("safe_info").textContent=""; }
+  };
+  $("btn_refresh_nonce").onclick=async ()=>{
+    try{ if(!gSafe) throw new Error("请先读取 Safe 信息"); gNonce=Number(await gSafe.nonce()); $("nonce").value=gNonce; $("build_status").textContent="已刷新 nonce="+gNonce; }
+    catch(e){ $("build_status").textContent="错误："+e.message; }
+  };
+
+  function decimalToSmallestStr(amountStr,decimals){
+    if(!/^\d+(\.\d+)?$/.test(amountStr)) throw new Error("金额格式应为非负小数");
+    const [i,f=""]=amountStr.split(".");
+    if(f.length>decimals) throw new Error("小数位超过 decimals");
+    const s=(i+f.padEnd(decimals,"0")).replace(/^0+/,"")||"0"; BigInt(s); return s;
+  }
+  function buildCall(){
+    const k=byName("kind").value;
+    if(k==="ETH"){
+      const to=$("eth_to").value.trim(); const amt=$("eth_amount").value.trim();
+      if(!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error("ETH 收款地址不合法");
+      const valueWei = ethers.parseUnits(amt||"0","ether");
+      return { to, value:valueWei, data:"0x" };
+    }else{
+      const token=$("erc_token").value.trim(), to=$("erc_to").value.trim();
+      const amtH=$("erc_amount").value.trim(), dec=Number($("erc_decimals").value||"18");
+      if(!/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("Token 地址不合法");
+      if(!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error("收款地址不合法");
+      const small=decimalToSmallestStr(amtH||"0",dec);
+      const data=IF_ERC20.encodeFunctionData("transfer",[to, small]);
+      return { to:token, value:0n, data };
+    }
+  }
+
+  $("btn_estimate").onclick=async ()=>{
+    try{
+      if(!gSafe) throw new Error("请先读取 Safe 信息");
+      const [u1]=requireRPCs(); const call=buildCall();
+      const tx={ from:gSafe.target, to:call.to, data:call.data, value:"0x"+BigInt(call.value||0n).toString(16) };
+      const gasHex=await rpc(u1,"eth_estimateGas",[tx]); const gas=parseInt(gasHex,16);
+      const withBuf=Math.ceil(gas*1.1); $("safeTxGas").value=withBuf;
+      $("build_status").textContent=`estimateGas: ${gas} → +10% = ${withBuf}`;
+    }catch(e){ $("build_status").textContent="错误："+e.message; }
+  };
+
+  $("btn_build_712").onclick=()=>{
+    try{
+      if(!gSafe) throw new Error("请先读取 Safe 信息");
+      const call=buildCall();
+      const op=Number($("op").value||"0");
+      const safeTxGas=Number($("safeTxGas").value||"0");
+      const baseGas=Number($("baseGas").value||"0");
+      const gasPrice=Number($("gasPrice").value||"0");
+      const gasToken=$("gasToken").value.trim()||ZERO;
+      const refundReceiver=$("refundReceiver").value.trim()||ZERO;
+      const nonce=Number($("nonce").value||"0");
+
+      gDomain={ verifyingContract:gSafe.target, chainId:gChainId };
+      gTypes={ SafeTx:[
+        {name:"to",type:"address"},
+        {name:"value",type:"uint256"},
+        {name:"data",type:"bytes"},
+        {name:"operation",type:"uint8"},
+        {name:"safeTxGas",type:"uint256"},
+        {name:"baseGas",type:"uint256"},
+        {name:"gasPrice",type:"uint256"},
+        {name:"gasToken",type:"address"},
+        {name:"refundReceiver",type:"address"},
+        {name:"nonce",type:"uint256"},
+      ]};
+      gMessage={ to:call.to, value:call.value.toString(), data:call.data, operation:op, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, nonce };
+      const typed={ domain:gDomain, types:gTypes, message:gMessage, primaryType:"SafeTx" };
+      $("typed_json").value=JSON.stringify(typed,null,2);
+      gHash=ethers.TypedDataEncoder.hash(gDomain,gTypes,gMessage);
+      $("typed_hash").value=gHash;
+      const div=$("qr_typed"); div.innerHTML=""; new QRCode(div,{text:JSON.stringify(typed),width:240,height:240,colorDark:"#000",colorLight:"#fff",correctLevel:QRCode.CorrectLevel.M});
+      $("build_status").textContent="已生成 EIP-712 JSON 与 safeTxHash";
+      gSigs=[]; renderSigs();
+    }catch(e){ $("build_status").textContent="错误："+e.message; }
+  };
+
+  // 收集签名
+  let stream=null, rafId=null;
+  $("btn_scan_sig").onclick=async ()=>{
+    $("cam_box").style.display=""; $("scan_status").textContent="启动摄像头…";
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+      $("video").srcObject=stream; await $("video").play();
+      $("scan_status").textContent="请对准签名二维码";
+      tick();
+    }catch(e){ $("scan_status").textContent="摄像头失败："+e.message; }
+  };
+  $("stop_scan").onclick=stopScan;
+  function stopScan(){ if(rafId)cancelAnimationFrame(rafId); rafId=null; if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+    $("video").srcObject=null; $("cam_box").style.display="none"; }
+  function tick(){
+    const v=$("video"); if(!v.videoWidth){ rafId=requestAnimationFrame(tick); return; }
+    const c=$("canvas"),ctx=c.getContext("2d"); c.width=v.videoWidth; c.height=v.videoHeight;
+    ctx.drawImage(v,0,0,c.width,c.height);
+    const img=ctx.getImageData(0,0,c.width,c.height);
+    const code=jsQR(img.data,c.width,c.height,{inversionAttempts:"attemptBoth"});
+    if(code && code.data){
+      const t=code.data.trim();
+      if(/^0x[0-9a-fA-F]+$/.test(t) && t.length>130){ stopScan(); addSigHex(t); return; }
+    }
+    rafId=requestAnimationFrame(tick);
+  }
+  $("btn_add_sig").onclick=()=> addSigHex($("sig_hex").value);
+  async function addSigHex(sigHex){
+    try{
+      if(!gHash||!gDomain) throw new Error("请先生成 EIP-712 JSON");
+      const sig=(sigHex||"").trim();
+      if(!/^0x[0-9a-fA-F]+$/.test(sig) || sig.length<130) throw new Error("签名格式不正确");
+      const signer=ethers.getAddress(ethers.verifyTypedData(gDomain,gTypes,gMessage,sig));
+      gSigs.push({signer, sig});
+      // 去重 + 排重
+      const map=new Map(); gSigs.forEach(x=> map.set(x.signer,x)); gSigs=Array.from(map.values());
+      $("sig_status").textContent = (gOwners.length && !gOwners.map(a=>a.toLowerCase()).includes(signer.toLowerCase()))
+        ? "警告：签名人不在 owners 列表" : (gSigs.length>=gThreshold ? "已达阈值" : "已添加");
+      renderSigs();
+    }catch(e){ $("sig_status").textContent="错误："+e.message; }
+  }
+  function renderSigs(){
+    const rows=gSigs.map((s,i)=>`<tr><td>${i+1}</td><td class="mono">${s.signer}</td><td class="mono">${s.sig.slice(0,18)}…</td></tr>`).join("");
+    $("sigs_table_box").innerHTML = `<div class="muted">已收集 ${gSigs.length} / 阈值 ${gThreshold}</div>
+      <table><tr><th>#</th><th>signer</th><th>sig</th></tr>${rows}</table>`;
+  }
+
+  function packSignatures(list){
+    const sorted=list.slice().sort((a,b)=> a.signer.toLowerCase() < b.signer.toLowerCase() ? -1 : 1);
+    let packed="0x";
+    for(const s of sorted){
+      const sig=ethers.Signature.from(s.sig);
+      const r=sig.r.replace(/^0x/,'').padStart(64,'0');
+      const S=sig.s.replace(/^0x/,'').padStart(64,'0');
+      let v=Number(sig.v); if(v===0||v===1) v+=27;
+      packed+= r + S + v.toString(16).padStart(2,'0');
+    }
+    return packed;
+  }
+
+  $("btn_assemble").onclick=()=>{
+    try{
+      if(!gSafe||!gMessage) throw new Error("缺少 Safe 或 EIP-712 消息");
+      if(gSigs.length<gThreshold) throw new Error(`签名不足：${gSigs.length}/${gThreshold}`);
+      const signatures=packSignatures(gSigs);
+      const data=IF_SAFE.encodeFunctionData("execTransaction",[
+        gMessage.to, gMessage.value, gMessage.data, gMessage.operation,
+        gMessage.safeTxGas, gMessage.baseGas, gMessage.gasPrice, gMessage.gasToken,
+        gMessage.refundReceiver, signatures
+      ]);
+      $("calldata").value=data;
+      $("asm_status").textContent="已编码 calldata";
+    }catch(e){ $("asm_status").textContent="错误："+e.message; }
+  };
+
+  $("btn_make_submit").onclick=async ()=>{
+    try{
+      if(!$("calldata").value) throw new Error("请先聚合并编码 calldata");
+      const h={
+        kind:"ETH", from:"提交者 EOA（由离线端推导）",
+        to:gSafe.target, value_wei:0, amount_eth:"0", data_hex:$("calldata").value,
+        chainId:gChainId, nonce:"提交者EOA当前nonce（下方工具可查）", gas:"建议估算填写",
+        maxFeePerGas_gwei:"参考你的 Gas 估算", maxPriorityFeePerGas_gwei:"参考你的 Gas 估算"
+      };
+      const txt=JSON.stringify(h,null,2);
+      const div=$("qr_submit"); div.innerHTML="";
+      new QRCode(div,{text:txt,width:240,height:240,colorDark:"#000",colorLight:"#fff",correctLevel:QRCode.CorrectLevel.M});
+      $("asm_status").textContent="已生成提交者 tx_human.json 二维码";
+    }catch(e){ $("asm_status").textContent="错误："+e.message; }
+  };
+
+  // 广播 / Nonce / 浏览器
+  $("btn_broadcast").onclick=async ()=>{
+    try{
+      const [u1,u2]=requireRPCs(); const raw=($("rawtx").value||"").trim();
+      if(!/^0x[0-9a-fA-F]+$/.test(raw)||raw.length<=100) throw new Error("RawTx 格式不正确");
+      const txhash=ethers.keccak256(raw); $("bc_status").textContent="本地 txhash："+txhash;
+      const urls=[u1,u2],names=["RPC_1","RPC_2"];
+      const results=await Promise.allSettled(urls.map(u=> rpc(u,"eth_sendRawTransaction",[raw])));
+      const rows=results.map((r,i)=> r.status==="fulfilled"
+        ? `<tr><td>${names[i]}</td><td class="ok">OK</td><td class="mono">${r.value}</td></tr>`
+        : `<tr><td>${names[i]}</td><td class="bad">FAIL</td><td class="mono">${(r.reason&&r.reason.message)||String(r.reason)}</td></tr>`
+      ).join("");
+      $("bc_table_box").innerHTML=`<table><tr><th>RPC</th><th>结果</th><th>响应/错误</th></tr>${rows}</table>`;
+    }catch(e){ $("bc_status").textContent="错误："+e.message; $("bc_table_box").innerHTML=""; }
+  };
+
+  $("btn_get_nonce").onclick=async ()=>{
+    const box=$("nonce_table_box");
+    try{
+      const [u1,u2]=requireRPCs(); const a=($("addr").value||"").trim();
+      if(!/^0x[0-9a-fA-F]{40}$/.test(a)) throw new Error("地址不合法");
+      const urls=[u1,u2],names=["RPC_1","RPC_2"];
+      const results=await Promise.allSettled(urls.map(async u=>{
+        const hex=await rpc(u,"eth_getTransactionCount",[a,"pending"]); return {hex,dec:parseInt(hex,16)};
+      }));
+      const rows=results.map((r,i)=> r.status==="fulfilled"
+        ? `<tr><td>${names[i]}</td><td class="ok">OK</td><td class="mono">${r.value.dec} (${r.value.hex})</td></tr>`
+        : `<tr><td>${names[i]}</td><td class="bad">FAIL</td><td class="mono">${(r.reason&&r.reason.message)||String(r.reason)}</td></tr>`
+      ).join("");
+      box.innerHTML=`<table><tr><th>RPC</th><th>结果</th><th>nonce</th></tr>${rows}</table>`;
+      $("aux_status").textContent="完成";
+    }catch(e){ $("aux_status").textContent="错误："+e.message; box.innerHTML=""; }
+  };
+
+  const EXPLORERS={1:"https://etherscan.io",11155111:"https://sepolia.etherscan.io",5:"https://goerli.etherscan.io",
+    10:"https://optimistic.etherscan.io",42161:"https://arbiscan.io",137:"https://polygonscan.com",
+    8453:"https://basescan.org",56:"https://bscscan.com",43114:"https://snowtrace.io"};
+  $("btn_open_addr").onclick=async ()=>{
+    try{
+      if(!gChainId){ const [u1]=requireRPCs(); gChainId=parseInt(await rpc(u1,"eth_chainId",[]),16); }
+      const base=EXPLORERS[gChainId]; if(!base) throw new Error("未知浏览器域名");
+      const a=($("addr").value||"").trim(); if(!/^0x[0-9a-fA-F]{40}$/.test(a)) throw new Error("地址不合法");
+      window.open(base+"/address/"+a,"_blank");
+    }catch(e){ $("aux_status").textContent="错误："+e.message; }
+  };
+})();
+</script>
+</body>
+</html>
